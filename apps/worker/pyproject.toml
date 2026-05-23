@@ -1,0 +1,52 @@
+[project]
+name = "aicruzz-worker"
+version = "1.0.0"
+description = "AiCruzz GPU worker — face swap, voice, video, image, cartoon"
+requires-python = ">=3.10"
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.7.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.0",
+    "pillow>=10.3.0",
+    "numpy>=1.26.0",
+    # GPU dependencies — install with extras [gpu] in production:
+    # "torch>=2.3.0",
+    # "torchvision>=0.18.0",
+    # "diffusers>=0.27.0",
+    # "transformers>=4.40.0",
+    # "insightface>=0.7.3",
+    # "onnxruntime-gpu>=1.18.0",
+    # "TTS>=0.22.0",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "torch>=2.3.0",
+    "torchvision>=0.18.0",
+    "diffusers>=0.27.0",
+    "transformers>=4.40.0",
+    "insightface>=0.7.3",
+    "onnxruntime-gpu>=1.18.0",
+]
+
+dev = [
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

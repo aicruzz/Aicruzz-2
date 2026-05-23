@@ -1,0 +1,151 @@
+version: '3.9'
+
+# Production docker-compose for the full AiCruzz stack.
+# Place a `.env` file alongside this with all secrets defined.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aicruzz_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aicruzz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-aicruzz_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [aicruzz]
+
+  redis:
+    image: redis:7-alpine
+    container_name: aicruzz_redis
+    restart: always
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD}', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [aicruzz]
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: aicruzz_api
+    restart: always
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    env_file: ./apps/api/.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aicruzz}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aicruzz_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      AI_ROUTER_URL: http://ai-router:4001
+      WEBRTC_URL: http://webrtc:4002
+      WEBRTC_WS_URL: ws://webrtc:4002
+      API_BASE_URL: http://api:4000
+      GPU_WORKER_URL: http://worker:8000
+    ports:
+      - '4000:4000'
+    volumes:
+      - api_uploads:/app/uploads
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://localhost:4000/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [aicruzz]
+
+  ai-router:
+    build:
+      context: ./apps/ai-router
+      dockerfile: Dockerfile
+    container_name: aicruzz_ai_router
+    restart: always
+    depends_on:
+      redis: { condition: service_healthy }
+    env_file: ./apps/ai-router/.env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      GPU_WORKER_URL: http://worker:8000
+    networks: [aicruzz]
+
+  webrtc:
+    build:
+      context: ./apps/webrtc
+      dockerfile: Dockerfile
+    container_name: aicruzz_webrtc
+    restart: always
+    env_file: ./apps/webrtc/.env
+    environment:
+      API_URL: http://api:4000
+      GPU_WORKER_URL: http://worker:8000
+      ANNOUNCED_IP: ${WEBRTC_ANNOUNCED_IP:-127.0.0.1}
+    network_mode: host  # required for WebRTC NAT traversal
+    ports:
+      - '4002:4002'
+
+  worker:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+    container_name: aicruzz_worker
+    restart: always
+    volumes:
+      - worker_uploads:/app/uploads
+    # Uncomment for NVIDIA GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    networks: [aicruzz]
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: aicruzz_web
+    restart: always
+    depends_on: [api]
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+      NEXT_PUBLIC_WEBRTC_WS_URL: ${NEXT_PUBLIC_WEBRTC_WS_URL:-ws://localhost:4002}
+    ports:
+      - '3000:3000'
+    networks: [aicruzz]
+
+  nginx:
+    image: nginx:alpine
+    container_name: aicruzz_nginx
+    restart: always
+    depends_on: [api, web]
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - api_uploads:/var/www/uploads:ro
+    networks: [aicruzz]
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_uploads:
+  worker_uploads:
+
+networks:
+  aicruzz:
+    driver: bridge
