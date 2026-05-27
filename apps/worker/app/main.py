@@ -6,6 +6,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from .services.liveportrait_engine import engine
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,6 +53,17 @@ async def lifespan(app: FastAPI):
         info.device_name,
         info.fp16_supported,
         info.xformers_available,
+    )
+
+    logger.info("Initializing LivePortrait engine...")
+    engine.warmup()
+
+    logger.info(
+        "LivePortrait ready=%s device=%s backend=%s reason=%s",
+        engine.info.ready,
+        engine.info.device,
+        engine.info.backend,
+        engine.info.not_ready_reason,
     )
 
     yield
