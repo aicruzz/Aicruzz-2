@@ -20,6 +20,7 @@ arriving while the first is still running is dropped with
 ``reason: "dropped-backpressure"`` — the client always sends the freshest
 frame next tick, so dropping is the right strategy for realtime.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -127,7 +128,7 @@ def _bad(reason: str | None, latency_ms: float = 0.0) -> AvatarReenactResponse:
     )
 
 
-@router.post("/live-cam/avatar-reenact", response_model=AvatarReenactResponse)
+@router.post("/avatar-reenact", response_model=AvatarReenactResponse)
 async def avatar_reenact(req: AvatarReenactRequest) -> AvatarReenactResponse:
     global _dropped_backpressure, _dropped_stale
 
@@ -199,17 +200,22 @@ async def avatar_reenact(req: AvatarReenactRequest) -> AvatarReenactResponse:
         )
 
         if reason is not None or out_b64 is None:
-            _trace_first_frame(sid, "RESPONSE_EMITTED", processed=False, reason=_normalize(reason))
+            _trace_first_frame(
+                sid, "RESPONSE_EMITTED", processed=False, reason=_normalize(reason)
+            )
             _finalize_first_frame(sid)
             return _bad(reason, latency_ms)
 
         wall_ms = (time.perf_counter() - t_request) * 1000
         logger.debug(
             "[avatar_reenact] sid=%s ok latency=%.1fms wall=%.1fms",
-            sid, latency_ms, wall_ms,
+            sid,
+            latency_ms,
+            wall_ms,
         )
         _trace_first_frame(
-            sid, "RESPONSE_EMITTED",
+            sid,
+            "RESPONSE_EMITTED",
             processed=True,
             latency_ms=round(latency_ms, 1),
             wall_ms=round(wall_ms, 1),
@@ -232,7 +238,7 @@ def _finalize_first_frame(sid: str) -> None:
     _first_frame_seen.add(sid)
 
 
-@router.get("/live-cam/avatar-reenact/stats")
+@router.get("/avatar-reenact/stats")
 async def avatar_reenact_stats() -> dict:
     """Diagnostic — lightweight counters since process start."""
     return {
