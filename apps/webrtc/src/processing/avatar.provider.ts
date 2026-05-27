@@ -97,8 +97,16 @@ class GpuAvatarProvider implements AvatarReenactmentProvider {
   async isReady(): Promise<boolean> {
     try {
       const res = await axios.get(`${GPU_URL}/health`, { timeout: 2000 });
-      const data = res.data as { avatar_available?: boolean };
-      return data.avatar_available === true;
+      const data = res.data as {
+        avatar_available?: boolean;
+        gpu_available?: boolean;
+        status?: string;
+      };
+      // Prefer the engine-specific signal once the worker emits it; fall back
+      // to gpu_available for back-compat with older worker builds (where the
+      // dedicated avatar field would otherwise be undefined → always false).
+      if (typeof data.avatar_available === 'boolean') return data.avatar_available;
+      return data.status === 'ok' && data.gpu_available === true;
     } catch {
       return false;
     }

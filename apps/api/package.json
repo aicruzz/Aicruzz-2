@@ -13,7 +13,8 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "ts-node src/db/seed.ts",
     "lint": "eslint src --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke:livecam": "ts-node src/modules/live-cam/__tests__/billing-tick.smoke.ts"
   },
   "dependencies": {
     "@types/cookie-parser": "^1.4.10",

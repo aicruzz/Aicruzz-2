@@ -121,6 +121,8 @@ cd apps/webrtc && ../../node_modules/.bin/ts-node-dev --respawn --transpile-only
 # Terminal 4 — Worker (Python)
 cd apps/worker && pip install -e . && uvicorn app.main:app --reload --port 8000 or uvicorn app.main:app --reload --port 8000
 
+uvicorn apps.worker.app.main:app --host 0.0.0.0 --port 8000
+
 # Terminal 5 — Web
 cd apps/web && ../../node_modules/.bin/next dev
 ```

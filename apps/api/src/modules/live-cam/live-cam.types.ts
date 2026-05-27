@@ -17,6 +17,8 @@ export interface BillingTickResponse {
   sufficient: boolean;
   creditsRemaining: number;
   creditsDeducted: number;
+  sessionActive: boolean;
+  duplicate?: boolean;
 }
 
 export interface SessionEndInput {

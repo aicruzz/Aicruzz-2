@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, sql } from 'drizzle-orm';
 import { db } from '../../config/database';
 import {
   wallets,
@@ -251,24 +251,26 @@ export async function deductCredits(input: DeductCreditsInput): Promise<DeductCr
         });
       }
 
-      const wallet = await tx.query.wallets.findFirst({
-        where: eq(wallets.userId, userId),
-        columns: { id: true, credits: true, expiresAt: true },
-      });
+      // Atomic decrement with balance guard — single SQL statement, no read-then-write race.
+      const updated = await tx
+        .update(wallets)
+        .set({
+          credits: sql`ROUND((${wallets.credits} - ${credits})::numeric, 4)::float8`,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(wallets.userId, userId), gte(wallets.credits, credits)))
+        .returning({ newCredits: wallets.credits });
 
-      const currentCredits = wallet?.credits ?? 0;
-
-      if (currentCredits < credits) {
-        throw new InsufficientCreditsError(credits, currentCredits);
+      if (updated.length === 0) {
+        const w = await tx.query.wallets.findFirst({
+          where: eq(wallets.userId, userId),
+          columns: { credits: true },
+        });
+        throw new InsufficientCreditsError(credits, w?.credits ?? 0);
       }
 
-      const balanceBefore = currentCredits;
-      const balanceAfter = parseFloat((currentCredits - credits).toFixed(4));
-
-      await tx
-        .update(wallets)
-        .set({ credits: balanceAfter })
-        .where(eq(wallets.userId, userId));
+      const balanceAfter = updated[0].newCredits;
+      const balanceBefore = parseFloat((balanceAfter + credits).toFixed(4));
 
       const [transaction] = await tx
         .insert(transactions)
@@ -294,7 +296,6 @@ export async function deductCredits(input: DeductCreditsInput): Promise<DeductCr
         balanceAfter,
       };
     },
-    { isolationLevel: 'serializable' },
   );
 }
 

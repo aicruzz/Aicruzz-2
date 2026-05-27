@@ -19,7 +19,6 @@ export async function billingTick(req: Request, res: Response): Promise<void> {
 
   const result = await liveCamService.billingTick({ sessionId, userId, credits });
   res.json(result);
-  console.log(result)
 }
 
 // POST /api/live-cam/session-end  (called by WebRTC server — internal)

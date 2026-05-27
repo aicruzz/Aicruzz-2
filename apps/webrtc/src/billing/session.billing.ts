@@ -43,16 +43,39 @@ export function startBilling(
         },
       );
 
-      const data = res.data as { sufficient: boolean; creditsRemaining: number };
+      const data = res.data as {
+        sufficient: boolean;
+        creditsRemaining: number;
+        creditsDeducted?: number;
+        sessionActive?: boolean;
+        duplicate?: boolean;
+      };
+
+      // Duplicate ticks: the API's per-session lock rejected this call because
+      // another tick is mid-flight for the same session. Skip accumulation —
+      // the winning tick already counted this second.
+      if (data.duplicate === true) {
+        return;
+      }
+
+      // Cooperative stop signal: either credits ran out (sufficient=false) or
+      // the session was ended elsewhere (sessionActive=false, e.g. via
+      // /session-end, admin force-stop, or parallel-tab end). Both cases mean
+      // we must clear the interval and tear down — otherwise the proxy keeps
+      // gating on a participant the API considers dead.
+      if (data.sufficient === false || data.sessionActive === false) {
+        const reason =
+          data.sufficient === false ? 'insufficient credits' : 'session ended';
+        console.warn(
+          `[Billing] Stopping session ${sessionId} for user ${userId} (${reason})`,
+        );
+        stopBilling(sessionId);
+        onInsufficientCredits();
+        return;
+      }
 
       session.secondsElapsed += 1;
       session.totalCreditsUsed += CREDITS_PER_SECOND;
-
-      if (!data.sufficient) {
-        console.warn(`[Billing] User ${userId} out of credits — ending session`);
-        stopBilling(sessionId);
-        onInsufficientCredits();
-      }
     } catch (err) {
       // Log but don't stop session on transient API errors
       console.error(`[Billing] Tick failed for session ${sessionId}:`, err);
