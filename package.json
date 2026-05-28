@@ -17,7 +17,7 @@
     "db:studio": "npm run db:studio --workspace=apps/api"
   },
   "engines": {
-    "node": "22.x",
+    "node": ">=22.0.0",
     "npm": ">=10.0.0"
   },
   "dependencies": {
