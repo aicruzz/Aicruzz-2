@@ -8,15 +8,17 @@
   "scripts": {
     "dev:api": "npm run dev --workspace=apps/api",
     "build:api": "npm run build --workspace=apps/api",
-    "dev": "npm run dev:api & npm run dev:web",
     "dev:web": "npm run dev --workspace=apps/web",
+    "build:web": "npm run build --workspace=apps/web",
+    "dev": "npm run dev:api & npm run dev:web",
+    "build": "npm run build:api && npm run build:web",
     "db:migrate": "npm run db:migrate --workspace=apps/api",
     "db:seed": "npm run db:seed --workspace=apps/api",
     "db:studio": "npm run db:studio --workspace=apps/api"
   },
   "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=9.0.0"
+    "node": "22.x",
+    "npm": ">=10.0.0"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.11.2",
