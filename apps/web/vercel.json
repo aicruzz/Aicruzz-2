@@ -1,0 +1,4 @@
+{
+    "installCommand": "npm install",
+    "buildCommand": "rm -rf .next && next build"
+}
