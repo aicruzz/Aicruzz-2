@@ -21,9 +21,10 @@ function commonCookieOpts() {
   return {
     httpOnly: true as const,
     secure: env.isProd,
-    // Lax works for top-level navigation + same-site XHR/fetch.
-    // Use 'none' if web and api end up on truly different sites in prod.
-    sameSite: 'lax' as const,
+    // Cross-site prod (Vercel web ↔ Railway api are different sites) requires
+    // SameSite=None; Secure so the cookie is sent on cross-site XHR/fetch.
+    // Dev stays 'lax' since 'none' requires Secure, unavailable on http://localhost.
+    sameSite: env.isProd ? ('none' as const) : ('lax' as const),
     domain: env.COOKIE_DOMAIN,
     path: '/',
   };
