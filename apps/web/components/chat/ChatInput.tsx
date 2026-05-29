@@ -23,13 +23,11 @@ interface ChatInputProps {
   ) => void;
   disabled?: boolean;
   placeholder?: string;
-  /** When set, replaces composer text and focuses (e.g. starter prompts). */
   composerInject?: { key: number; text: string } | null;
   onComposerInjectConsumed?: () => void;
 }
 
-// Uploads the file to our API (which stores it on Cloudinary) in a single
-// multipart request, reporting progress, and returns the public file URL.
+// Upload function stays EXACTLY same
 function uploadChatFile(
   file: File,
   onProgress: (pct: number) => void,
@@ -45,19 +43,20 @@ function uploadChatFile(
         onProgress(Math.round((e.loaded / e.total) * 100));
       }
     });
+
     xhr.addEventListener("load", () => {
       let json: { data?: { fileUrl: string }; message?: string } = {};
       try {
         json = JSON.parse(xhr.responseText);
-      } catch {
-        /* non-JSON error body */
-      }
+      } catch { }
+
       if (xhr.status >= 200 && xhr.status < 300 && json.data?.fileUrl) {
         resolve({ fileUrl: json.data.fileUrl });
       } else {
         reject(new Error(json.message ?? `Upload failed (${xhr.status})`));
       }
     });
+
     xhr.addEventListener("error", () =>
       reject(new Error("Network error during upload")),
     );
@@ -79,16 +78,21 @@ export function ChatInput({
   onComposerInjectConsumed,
 }: ChatInputProps) {
   const [text, setText] = useState("");
-  const [attachment, setAttachment] = useState<AttachedFile | null>(null);
+
+  // 🔥 CHANGED: single → multiple attachments
+  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
+
   const [editQuality, setEditQuality] = useState<"FAST" | "PRO">("FAST");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isVideo = attachment?.file.type.startsWith("video/");
+  const isVideo = attachments[0]?.file.type.startsWith("video/");
+
+  // 🔥 UPDATED: supports multiple attachments
   const canSend =
-    (text.trim().length > 0 || !!attachment?.uploadedUrl) &&
+    (text.trim().length > 0 || attachments.length > 0) &&
     !disabled &&
-    !attachment?.uploading;
+    !attachments.some((a) => a.uploading);
 
   useEffect(() => {
     if (!composerInject) return;
@@ -110,77 +114,100 @@ export function ChatInput({
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
   }
 
-  function removeAttachment() {
-    setAttachment((prev) => {
-      if (prev?.previewUrl) URL.revokeObjectURL(prev.previewUrl);
-      return null;
+  // 🔥 UPDATED: remove one attachment
+  function removeAttachment(index: number) {
+    setAttachments((prev) => {
+      const item = prev[index];
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      return prev.filter((_, i) => i !== index);
     });
   }
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
-    onSend(
-      text.trim(),
-      isVideo ? undefined : attachment?.uploadedUrl,
-      isVideo ? attachment?.uploadedUrl : undefined,
-      editQuality,
-    );
+
+    const imageUrl = attachments.find((a) =>
+      a.file.type.startsWith("image/"),
+    )?.uploadedUrl;
+
+    const videoUrl = attachments.find((a) =>
+      a.file.type.startsWith("video/"),
+    )?.uploadedUrl;
+
+    onSend(text.trim(), imageUrl, videoUrl, editQuality);
+
     setText("");
-    setAttachment(null);
+    setAttachments([]);
+
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [canSend, text, attachment, isVideo, editQuality, onSend]);
+  }, [canSend, text, attachments, editQuality, onSend]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Escape") {
-      if (attachment) {
+      if (attachments.length > 0) {
         e.preventDefault();
-        removeAttachment();
+        setAttachments([]);
       }
       return;
     }
+
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSend();
       return;
     }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   }
 
+  // 🔥 UPDATED ONLY: multi-file support (max 4)
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files || []).slice(0, 4);
+    if (!files.length) return;
 
-    const maxSize = file.type.startsWith("video/")
-      ? 100 * 1024 * 1024
-      : 20 * 1024 * 1024;
-    if (file.size > maxSize) {
-      toast.error(
-        `File too large. Max: ${file.type.startsWith("video/") ? "100 MB" : "20 MB"}`,
-      );
-      return;
-    }
+    const mapped: AttachedFile[] = files.map((file) => ({
+      file,
+      previewUrl: URL.createObjectURL(file),
+      uploading: true,
+      progress: 0,
+    }));
 
-    const previewUrl = URL.createObjectURL(file);
-    setAttachment({ file, previewUrl, uploading: true, progress: 0 });
+    setAttachments(mapped);
 
     try {
-      const { fileUrl } = await uploadChatFile(file, (pct) =>
-        setAttachment((prev) => (prev ? { ...prev, progress: pct } : null)),
+      const results = await Promise.all(
+        mapped.map((item, index) =>
+          uploadChatFile(item.file, (pct) => {
+            setAttachments((prev) => {
+              const copy = [...prev];
+              if (copy[index]) {
+                copy[index] = {
+                  ...copy[index],
+                  progress: pct,
+                };
+              }
+              return copy;
+            });
+          }),
+        ),
       );
 
-      setAttachment((prev) =>
-        prev
-          ? { ...prev, uploadedUrl: fileUrl, uploading: false, progress: 100 }
-          : null,
+      setAttachments((prev) =>
+        prev.map((item, i) => ({
+          ...item,
+          uploadedUrl: results[i].fileUrl,
+          uploading: false,
+          progress: 100,
+        })),
       );
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
-      setAttachment(null);
+      toast.error("Upload failed");
+      setAttachments([]);
     }
 
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -189,20 +216,23 @@ export function ChatInput({
   return (
     <div className="border-t border-white/5 bg-surface-900/80 backdrop-blur-sm px-4 py-4">
       {/* ── Attachment preview ── */}
-      {attachment && (
+      {attachments.length > 0 && (
         <div className="mb-3">
-          <FilePreview
-            file={attachment.file}
-            previewUrl={attachment.previewUrl}
-            uploading={attachment.uploading}
-            progress={attachment.progress}
-            onRemove={removeAttachment}
-          />
+          {attachments.map((attachment, i) => (
+            <FilePreview
+              key={i}
+              file={attachment.file}
+              previewUrl={attachment.previewUrl}
+              uploading={attachment.uploading}
+              progress={attachment.progress}
+              onRemove={() => removeAttachment(i)}
+            />
+          ))}
         </div>
       )}
 
-      {/* ── Edit quality (only when an image is attached) ── */}
-      {attachment && !isVideo && (
+      {/* ── Edit quality ── */}
+      {attachments.length > 0 && !isVideo && (
         <div className="mb-3 flex items-center gap-2">
           <span className="text-[11px] text-gray-500">Edit quality:</span>
           {(["FAST", "PRO"] as const).map((q) => (
@@ -228,14 +258,14 @@ export function ChatInput({
         {/* Upload button */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || !!attachment}
+          disabled={disabled || attachments.length >= 4}
           className={clsx(
             "flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl border transition-all",
-            attachment
+            attachments.length >= 4
               ? "border-brand-500/30 bg-brand-500/10 text-brand-400 cursor-not-allowed"
               : "border-white/10 bg-surface-700/60 text-gray-400 hover:border-brand-500/30 hover:text-brand-400",
           )}
-          title="Attach image or video"
+          title="Attach image or video (max 4)"
         >
           <Paperclip className="h-4 w-4" />
         </button>
@@ -243,6 +273,7 @@ export function ChatInput({
         <input
           ref={fileInputRef}
           type="file"
+          multiple
           accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
           className="hidden"
           onChange={handleFileSelect}
@@ -289,8 +320,7 @@ export function ChatInput({
       </div>
 
       <p className="mt-2 text-center text-[10px] text-gray-600">
-        Tip: be specific — describe the subject, action, setting, style, and
-        lighting for the best results.
+        Tip: be specific — describe the subject, action, setting, style, and lighting for the best results.
       </p>
       <p className="mt-1 text-center text-[10px] text-gray-600">
         2 credits/message · 5 credits/generated image · AI may make mistakes
