@@ -1,16 +1,29 @@
 // next.config.mjs
 
+import path from 'path';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
 
-  // VERY IMPORTANT for Vercel monorepo deployment
+  // Production standalone build
   output: 'standalone',
+
+  experimental: {
+    // VERY IMPORTANT for monorepos
+    outputFileTracingRoot: path.join(process.cwd(), '../../'),
+  },
 
   images: {
     remotePatterns: [
-      { protocol: 'http', hostname: 'localhost' },
-      { protocol: 'https', hostname: '*.aicruzz.com' },
+      {
+        protocol: 'http',
+        hostname: 'localhost',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.aicruzz.com',
+      },
     ],
   },
 
