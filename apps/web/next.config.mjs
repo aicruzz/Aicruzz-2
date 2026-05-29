@@ -1,36 +1,24 @@
-// next.config.mjs
-
-import path from 'path';
+import path from "path";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
 
-  // Production standalone build
-  output: 'standalone',
-
   experimental: {
-    // VERY IMPORTANT for monorepos
-    outputFileTracingRoot: path.join(process.cwd(), '../../'),
+    // FIX: scope tracing ONLY to web app, not entire monorepo
+    outputFileTracingRoot: path.join(process.cwd()),
   },
 
   images: {
     remotePatterns: [
-      {
-        protocol: 'http',
-        hostname: 'localhost',
-      },
-      {
-        protocol: 'https',
-        hostname: '*.aicruzz.com',
-      },
+      { protocol: "http", hostname: "localhost" },
+      { protocol: "https", hostname: "*.aicruzz.com" },
     ],
   },
 
   env: {
     NEXT_PUBLIC_API_URL:
-      process.env.NEXT_PUBLIC_API_URL ??
-      'http://localhost:4000',
+      process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000",
   },
 };
 
