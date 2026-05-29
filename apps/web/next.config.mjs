@@ -1,13 +1,8 @@
-import path from "path";
+// next.config.mjs
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-
-  experimental: {
-    // FIX: scope tracing ONLY to web app, not entire monorepo
-    outputFileTracingRoot: path.join(process.cwd()),
-  },
 
   images: {
     remotePatterns: [
