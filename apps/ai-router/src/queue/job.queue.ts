@@ -22,14 +22,14 @@ export function initQueue(router: RouterFn): void {
 
   const connection = new IORedis(REDIS_URL, {
     maxRetriesPerRequest: null,
-  });
+  }) as unknown as import("bullmq").ConnectionOptions;
 
   queue = new Queue(QUEUE_NAME, {
     connection,
     defaultJobOptions: {
       attempts: 1,
       removeOnComplete: { count: 100 },
-      removeOnFail:     { count: 50  },
+      removeOnFail: { count: 50 },
     },
   });
 
@@ -81,26 +81,26 @@ export function initQueue(router: RouterFn): void {
 
     const failPayload = {
       requestId: job.data.requestId,
-      success:   false,
-      provider:  "GPU",
+      success: false,
+      provider: "GPU",
       result: {
-        success:   false,
-        provider:  "GPU",
+        success: false,
+        provider: "GPU",
         latencyMs: 0,
         raw: {
           status: "FAILED",
-          error:  publicRouteFailureMessage(job.data.request.module),
+          error: publicRouteFailureMessage(job.data.request.module),
         },
       },
-      attemptsCount:  job.attemptsMade,
+      attemptsCount: job.attemptsMade,
       totalLatencyMs: 0,
-      strategy:       job.data.request.strategy,
-      fallbackUsed:   false,
+      strategy: job.data.request.strategy,
+      fallbackUsed: false,
     };
 
     console.error("[Queue] Job failure detail:", job.failedReason ?? err.message);
 
-    await fireWebhook(job.data.webhookUrl, failPayload).catch(() => {});
+    await fireWebhook(job.data.webhookUrl, failPayload).catch(() => { });
   });
 }
 
@@ -134,33 +134,33 @@ function buildWebhookPayload(result: RouteResponse, jobData: QueueJob): object {
 
   return {
     requestId: result.requestId,
-    success:   result.success,
-    provider:  result.provider,
+    success: result.success,
+    provider: result.provider,
     result: {
-      success:   result.result.success,
-      provider:  result.result.provider,
+      success: result.result.success,
+      provider: result.result.provider,
       latencyMs: result.result.latencyMs,
-        raw: {
-          status:        'COMPLETED',
-          output_url:    raw?.output_url    ?? result.result.outputUrl    ?? null,
-          thumbnail_url: raw?.thumbnail_url ?? result.result.thumbnailUrl ?? null,
-          // Actual generated clip length (clamped to provider-supported
-          // values) so the backend can correct stored duration + billing.
-          duration_seconds:
-            (raw?.durationSeconds as number | undefined) ??
-            result.result.durationSeconds ??
-            null,
-          // Additive pipeline metadata (non-breaking; backend ignores if unused).
-          keyframe_url:  raw?.keyframe_url  ?? null,
-          pipeline_mode: raw?.pipeline_mode ?? null,
-          steps:         raw?.steps         ?? null,
-          error:         null,
-        },
+      raw: {
+        status: 'COMPLETED',
+        output_url: raw?.output_url ?? result.result.outputUrl ?? null,
+        thumbnail_url: raw?.thumbnail_url ?? result.result.thumbnailUrl ?? null,
+        // Actual generated clip length (clamped to provider-supported
+        // values) so the backend can correct stored duration + billing.
+        duration_seconds:
+          (raw?.durationSeconds as number | undefined) ??
+          result.result.durationSeconds ??
+          null,
+        // Additive pipeline metadata (non-breaking; backend ignores if unused).
+        keyframe_url: raw?.keyframe_url ?? null,
+        pipeline_mode: raw?.pipeline_mode ?? null,
+        steps: raw?.steps ?? null,
+        error: null,
+      },
     },
-    attemptsCount:  result.attemptsCount,
+    attemptsCount: result.attemptsCount,
     totalLatencyMs: result.totalLatencyMs,
-    strategy:       result.strategy,
-    fallbackUsed:   result.fallbackUsed,
+    strategy: result.strategy,
+    fallbackUsed: result.fallbackUsed,
   };
 }
 
@@ -178,7 +178,7 @@ export async function enqueueJob(payload: QueueJob): Promise<string> {
 
   const job = await queue.add(payload.jobId, payload, {
     priority: payload.request.priority ?? 5,
-    jobId:    payload.requestId,
+    jobId: payload.requestId,
   });
 
   return job.id ?? payload.jobId;
@@ -195,7 +195,7 @@ export async function getJobStatus(jobId: string): Promise<{
   const job = await queue.getJob(jobId);
   if (!job) return { id: jobId, status: "NOT_FOUND" };
 
-  const state  = await job.getState();
+  const state = await job.getState();
   const result = job.returnvalue as RouteResponse | undefined;
 
   return redactJobStatusHttpPayload({
@@ -210,7 +210,7 @@ async function fireWebhook(url: string, payload: object): Promise<void> {
   const response = await axios.post(url, payload, {
     timeout: 10_000,
     headers: {
-      "Content-Type":    "application/json",
+      "Content-Type": "application/json",
       "x-router-secret": AI_ROUTER_SECRET,
     },
     validateStatus: (status) => status < 500,
