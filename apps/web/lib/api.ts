@@ -282,4 +282,8 @@ export const walletApi = {
     api.post('/wallet/crypto/submit', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  adminGetCryptoPayments: (status?: string) =>
+    api.get(`/wallet/admin/crypto${status ? `?status=${status}` : ''}`),
+  adminReviewCryptoPayment: (paymentId: string, approved: boolean, adminNote?: string) =>
+    api.post(`/wallet/admin/crypto/${paymentId}/review`, { approved, adminNote }),
 };

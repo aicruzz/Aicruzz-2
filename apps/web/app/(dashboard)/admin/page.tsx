@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Users, DollarSign, ShieldAlert, Zap,
   Clock, Code2, RefreshCw, Activity,
@@ -10,6 +10,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { api, getApiError } from '@/lib/api';
 import { StatsCard } from '@/components/admin/StatsCard';
 import { UserTable } from '@/components/admin/UserTable';
+import { CryptoPaymentsPanel } from '@/components/admin/CryptoPaymentsPanel';
 import { Button } from '@/components/ui/Button';
 import { AdminBannerManager } from '@/components/banners/AdminBannerManager';
 
@@ -35,6 +36,7 @@ interface UserRow {
 }
 
 export default function AdminPage() {
+  const cryptoPanelRef = useRef<HTMLDivElement>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loadingStats, setLoadingStats] = useState(true);
@@ -113,7 +115,7 @@ export default function AdminPage() {
               <strong>{stats!.pendingCryptoPayments}</strong> crypto payment
               {stats!.pendingCryptoPayments > 1 ? 's' : ''} awaiting review.{' '}
               <button
-                onClick={() => api.get('/wallet/admin/crypto').then(() => toast('Check wallet admin panel'))}
+                onClick={() => cryptoPanelRef.current?.scrollIntoView({ behavior: 'smooth' })}
                 className="underline hover:text-yellow-200"
               >
                 Review now
@@ -121,6 +123,14 @@ export default function AdminPage() {
             </p>
           </div>
         )}
+
+        {/* Crypto payments */}
+        <div ref={cryptoPanelRef} className="glass rounded-2xl border border-white/5 p-5">
+          <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-gray-500">
+            Crypto Payments
+          </h2>
+          <CryptoPaymentsPanel />
+        </div>
 
         {/* User management */}
         <div className="glass rounded-2xl border border-white/5 p-5">
