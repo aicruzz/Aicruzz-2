@@ -126,6 +126,7 @@ uvicorn apps.worker.app.main:app --host 0.0.0.0 --port 8000
 # Terminal 5 — Web
 cd apps/web && ../../node_modules/.bin/next dev
 ```
+npm run dev
 
 source venv/bin/activate
 
