@@ -833,3 +833,71 @@ async function handleImageTransform(
     });
   }
 }
+
+// ─── PROMPT ASSISTANT (enhance) ──────────────────────────────
+//
+// Standalone helper used by the studio "prompt assistant" button. It is
+// deliberately isolated from sendMessage(): NO credit deduction, NO chat
+// creation/persistence, NO image-intent detection, NO SSE — just a single
+// cheap LLM round-trip that returns the rewritten prompt as plain text.
+
+export type EnhanceAction = "improve" | "expand" | "optimize";
+
+const ENHANCE_SYSTEM_PROMPTS: Record<EnhanceAction, string> = {
+  improve:
+    "You are a prompt-editing assistant for an AI video/cartoon generator. " +
+    "Rewrite the user's prompt to fix grammar and improve clarity while keeping " +
+    "the original intent and meaning. Do NOT add new ideas, subjects, or scenes. " +
+    "Reply with ONLY the rewritten prompt — no preamble, quotes, or explanation.",
+  expand:
+    "You are a prompt-editing assistant for an AI video/cartoon generator. " +
+    "Expand the user's prompt with more detail: enrich the scene description, " +
+    "add sensory and visual specifics, and increase creative depth while staying " +
+    "true to the original subject and intent. " +
+    "Reply with ONLY the expanded prompt — no preamble, quotes, or explanation.",
+  optimize:
+    "You are a prompt-engineering assistant for an AI video/cartoon generator. " +
+    "Rewrite the user's prompt for the best possible generation quality: improve " +
+    "structure and apply strong prompt-engineering practices (clear subject, " +
+    "action, setting, style, lighting, and camera framing) while preserving the " +
+    "original intent. " +
+    "Reply with ONLY the optimized prompt — no preamble, quotes, or explanation.",
+};
+
+export async function enhancePrompt(
+  action: EnhanceAction,
+  prompt: string,
+): Promise<string> {
+  const trimmed = prompt.trim();
+  if (!trimmed) {
+    throw new AppError("Prompt is required", 400);
+  }
+  if (trimmed.length > 4000) {
+    throw new AppError("Prompt is too long (max 4,000 characters)", 400);
+  }
+
+  try {
+    const result = await aiRouter.route({
+      userId: "system",
+      module: "CHAT",
+      strategy: "COST",
+      stream: false,
+      model: "gpt-4o-mini",
+      systemPrompt: ENHANCE_SYSTEM_PROMPTS[action],
+      messages: [{ role: "user", content: trimmed }],
+    });
+
+    const text = (result.result.text ?? "").trim();
+    if (!text) {
+      throw new AppError(CLIENT_AI_UNAVAILABLE, 502);
+    }
+    return text;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    logger.error("enhancePrompt failed:", {
+      message: err instanceof Error ? err.message : String(err),
+      action,
+    });
+    throw new AppError(CLIENT_AI_UNAVAILABLE, 502);
+  }
+}

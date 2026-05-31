@@ -261,6 +261,8 @@ export const chatApi = {
   deleteChat: (chatId: string) => api.delete(`/chat/${chatId}`),
   updateTitle: (chatId: string, title: string) =>
     api.patch(`/chat/${chatId}/title`, { title }),
+  enhancePrompt: (action: 'improve' | 'expand' | 'optimize', prompt: string) =>
+    api.post('/chat/enhance-prompt', { action, prompt }),
   uploadFile: (file: File) => {
     const fd = new FormData();
     fd.append('file', file);

@@ -43,6 +43,20 @@ export const sendMessageValidator = [
     .withMessage('stream must be boolean'),
 ];
 
+export const enhancePromptValidator = [
+  body('action')
+    .isIn(['improve', 'expand', 'optimize'])
+    .withMessage('action must be improve, expand, or optimize'),
+
+  body('prompt')
+    .isString()
+    .trim()
+    .notEmpty()
+    .withMessage('Prompt is required')
+    .isLength({ max: 4000 })
+    .withMessage('Prompt too long (max 4,000 characters)'),
+];
+
 export const updateChatTitleValidator = [
   param('chatId').isString().notEmpty(),
   body('title')

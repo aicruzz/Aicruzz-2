@@ -1,8 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { db } from '../../config/database';
-import { videoJobs } from '../../db/schema';
+import { videoJobs, generationJobsMetadata } from '../../db/schema';
 import { aiRouter } from '../../services/ai-router.client';
+import { tryGenerateNarration } from '../voice/voice.service';
+import { tryLipSync } from '../voice/lip-sync.service';
 import { deductCredits, refundCredits } from '../wallet/wallet.service';
 import type { RouteResponse, RoutingStrategy } from '../../types/index';
 import { logActivity } from '../../services/activity.service';
@@ -136,6 +138,42 @@ export async function createVideoJob(
       details: { jobId: job.id, creditsCharged: creditsRequired, strategy: routingStrategy },
     });
 
+    // Talking-video narration — reuses the cartoon narration pipeline. Audio
+    // is produced now and stored alongside the job; the real lip-sync/mux
+    // runs on completion (webhook/poll). Best-effort & fully non-fatal: a
+    // failure here must never fail or refund the already-queued video job.
+    if (input.voiceEnabled && input.voiceText?.trim()) {
+      try {
+        const narration = await tryGenerateNarration(userId, {
+          text: input.voiceText,
+          gender: input.voiceGender,
+        });
+        if (narration) {
+          await db.insert(generationJobsMetadata).values({
+            jobId: job.id,
+            userId,
+            module: 'VIDEO',
+            mode: 'VIDEO',
+            voiceMode: 'AI',
+            voiceText: input.voiceText,
+            extra: {
+              voice: {
+                audioUrl: narration.audioUrl,
+                durationSeconds: narration.durationSeconds,
+                voiceId: narration.voiceId ?? null,
+                subtitlesVtt: narration.subtitlesVtt,
+                lipSyncStatus: 'PENDING_VIDEO',
+              },
+            },
+          });
+        }
+      } catch (err) {
+        logger.warn(`Video job ${job.id}: narration generation failed (non-fatal)`, {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     await emit({
       jobId: job.id,
       userId,
@@ -258,11 +296,53 @@ export async function handleJobWebhook(
       );
     }
 
+    // Talking-video render: if narration was produced at create time, lip-sync
+    // it onto the finished (silent) clip → final merged MP4 with audio embedded.
+    // Reuses the cartoon lip-sync/mux service; best-effort & non-fatal (the
+    // plain video stays if narration is absent or the mux fails). Runs BEFORE
+    // the DB write + SSE emit so the completed event carries the muxed URL.
+    let finalOutputUrl = result.outputUrl ?? null;
+    if (result.outputUrl) {
+      const meta = await db.query.generationJobsMetadata.findFirst({
+        where: eq(generationJobsMetadata.jobId, jobId),
+        columns: { extra: true },
+      });
+      const voice = (meta?.extra as { voice?: {
+        audioUrl?: string; subtitlesVtt?: string;
+      } } | null)?.voice;
+
+      if (voice?.audioUrl) {
+        const synced = await tryLipSync({
+          videoUrl: result.outputUrl,
+          audioUrl: voice.audioUrl,
+          subtitlesVtt: voice.subtitlesVtt,
+        });
+        if (synced?.lipSynced && synced.videoUrl) {
+          finalOutputUrl = synced.videoUrl;
+          await db
+            .update(generationJobsMetadata)
+            .set({
+              extra: {
+                voice: {
+                  ...voice,
+                  finalVideoUrl: synced.videoUrl,
+                  lipSyncStatus: 'RENDERED',
+                  lipSyncProvider: synced.provider,
+                  lipSyncNote: synced.note ?? null,
+                },
+              },
+              updatedAt: new Date(),
+            })
+            .where(eq(generationJobsMetadata.jobId, jobId));
+        }
+      }
+    }
+
     await db
       .update(videoJobs)
       .set({
         status: 'COMPLETED',
-        outputUrl: result.outputUrl ?? null,
+        outputUrl: finalOutputUrl,
         thumbnailUrl: result.thumbnailUrl ?? null,
         provider: result.provider ?? null,
         durationSeconds: correctedDuration,
@@ -279,7 +359,7 @@ export async function handleJobWebhook(
       stage: 'completed',
       progress: 100,
       message: 'Generation complete',
-      outputUrl: result.outputUrl ?? null,
+      outputUrl: finalOutputUrl,
       thumbnailUrl: result.thumbnailUrl ?? null,
       provider: result.provider ?? null,
     });

@@ -7,6 +7,7 @@ import {
   sendMessageValidator,
   updateChatTitleValidator,
   listChatsValidator,
+  enhancePromptValidator,
 } from './chat.validators';
 import * as chatController from './chat.controller';
 
@@ -49,6 +50,9 @@ router.patch('/:chatId/title', updateChatTitleValidator, validate, chatControlle
 
 // POST   /api/chat/message — SSE streaming
 router.post('/message', sendMessageValidator, validate, chatController.sendMessage);
+
+// POST   /api/chat/enhance-prompt — prompt assistant (improve/expand/optimize)
+router.post('/enhance-prompt', enhancePromptValidator, validate, chatController.enhancePrompt);
 
 // POST   /api/chat/upload — multipart file; uploaded server-side to Cloudinary
 router.post('/upload', chatUpload.single('file'), chatController.uploadFile);

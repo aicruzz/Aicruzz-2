@@ -607,6 +607,7 @@ export async function getJobStatus(jobId: string, userId: string) {
   });
   if (!job) throw new AppError('Job not found', 404);
 
+  let current = job;
   if ((job.status === 'QUEUED' || job.status === 'PROCESSING') && job.queueJobId) {
     try {
       const routerStatus = await aiRouter.getJobStatus(job.queueJobId);
@@ -624,13 +625,76 @@ export async function getJobStatus(jobId: string, userId: string) {
           })
           .where(eq(cartoonJobs.id, jobId))
           .returning();
-        return updated;
+        current = updated;
+
+        // Mirror the webhook talking-video render: if narration exists, lip-sync
+        // it onto the finished video → final merged MP4 with audio embedded.
+        // Without this, a cartoon completed via polling (no webhook) stays silent.
+        if (r.outputUrl) {
+          const meta = await db.query.generationJobsMetadata.findFirst({
+            where: eq(generationJobsMetadata.jobId, jobId),
+            columns: { extra: true },
+          });
+          const voice = (meta?.extra as { voice?: {
+            audioUrl?: string; subtitlesVtt?: string;
+          } } | null)?.voice;
+
+          if (voice?.audioUrl) {
+            const synced = await tryLipSync({
+              videoUrl: r.outputUrl,
+              audioUrl: voice.audioUrl,
+              subtitlesVtt: voice.subtitlesVtt,
+            });
+            if (synced?.lipSynced && synced.videoUrl) {
+              await db
+                .update(cartoonJobs)
+                .set({ outputUrl: synced.videoUrl, updatedAt: new Date() })
+                .where(eq(cartoonJobs.id, jobId));
+              await db
+                .update(generationJobsMetadata)
+                .set({
+                  extra: {
+                    voice: {
+                      ...voice,
+                      finalVideoUrl: synced.videoUrl,
+                      lipSyncStatus: 'RENDERED',
+                      lipSyncProvider: synced.provider,
+                      lipSyncNote: synced.note ?? null,
+                    },
+                  },
+                  updatedAt: new Date(),
+                })
+                .where(eq(generationJobsMetadata.jobId, jobId));
+              current = { ...current, outputUrl: synced.videoUrl };
+            }
+          }
+        }
       }
     } catch {
       /* router unreachable */
     }
   }
-  return job;
+
+  // Attach the narration track so the talking-video player can play audio
+  // in sync when it is delivered as a SEPARATE track (lip-sync not muxed).
+  const voiceMeta = await db.query.generationJobsMetadata.findFirst({
+    where: eq(generationJobsMetadata.jobId, jobId),
+    columns: { extra: true },
+  });
+  const voice = (voiceMeta?.extra as { voice?: {
+    audioUrl?: string; subtitlesVtt?: string; lipSyncStatus?: string;
+  } } | null)?.voice;
+
+  return {
+    ...current,
+    voice: voice
+      ? {
+          audioUrl: voice.audioUrl ?? null,
+          subtitlesVtt: voice.subtitlesVtt ?? null,
+          lipSyncStatus: voice.lipSyncStatus ?? null,
+        }
+      : null,
+  };
 }
 
 // ─── LIST JOBS ────────────────────────────────────────────────

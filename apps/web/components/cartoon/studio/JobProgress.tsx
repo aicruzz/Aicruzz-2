@@ -20,6 +20,13 @@ interface Job {
   thumbnailUrl: string | null;
   errorMessage: string | null;
   provider: string | null;
+  // Narration track. When delivered as a SEPARATE track (lip-sync not muxed),
+  // the player plays audioUrl in sync; when RENDERED, audio is already in the MP4.
+  voice?: {
+    audioUrl: string | null;
+    subtitlesVtt: string | null;
+    lipSyncStatus: string | null;
+  } | null;
 }
 
 const STEPS: { key: Status; label: string }[] = [
@@ -137,6 +144,14 @@ export function JobProgress({
           <TalkingVideoPlayer
             src={job.outputUrl}
             poster={job.thumbnailUrl ?? undefined}
+            // Only play the separate audio track when it is NOT already muxed
+            // into the MP4 (avoids double audio on lip-synced renders).
+            audioSrc={
+              job.voice?.audioUrl && job.voice.lipSyncStatus !== 'RENDERED'
+                ? job.voice.audioUrl
+                : undefined
+            }
+            subtitlesVtt={job.voice?.subtitlesVtt ?? undefined}
           />
           <div className="flex flex-wrap gap-2">
             <a href={job.outputUrl} download target="_blank" rel="noreferrer">

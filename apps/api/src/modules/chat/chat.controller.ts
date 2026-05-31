@@ -52,6 +52,17 @@ export async function sendMessage(req: Request, res: Response): Promise<void> {
   await chatService.sendMessage(req.user!.userId, req.body, res);
 }
 
+// POST /api/chat/enhance-prompt — prompt assistant (improve/expand/optimize).
+// Plain JSON; no credits, no chat persistence, no SSE.
+export async function enhancePrompt(req: Request, res: Response): Promise<void> {
+  const { action, prompt } = req.body as {
+    action: chatService.EnhanceAction;
+    prompt: string;
+  };
+  const enhancedPrompt = await chatService.enhancePrompt(action, prompt);
+  sendSuccess(res, { enhancedPrompt }, 'Prompt enhanced');
+}
+
 // POST /api/chat/upload — multipart file; uploaded server-side to Cloudinary.
 // Returns the public https URL the client attaches to a chat message.
 export async function uploadFile(req: Request, res: Response): Promise<void> {
