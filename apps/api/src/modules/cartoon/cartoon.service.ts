@@ -476,20 +476,58 @@ export async function generateCartoon(userId: string, input: GenerateCartoonInpu
 export async function handleWebhook(jobId: string, payload: WebhookPayload) {
   const job = await db.query.cartoonJobs.findFirst({
     where: eq(cartoonJobs.id, jobId),
-    columns: { userId: true, creditsCharged: true, creditRefunded: true },
+    columns: {
+      userId: true,
+      type: true,
+      durationSecs: true,
+      creditsCharged: true,
+      creditRefunded: true,
+    },
   });
   if (!job) return;
 
   if (payload.routerStatus === 'COMPLETED') {
+    // Mirror the Video Studio refund logic: if the provider generated a
+    // shorter clip than the user requested and paid for, refund the delta.
+    // Idempotent: once durationSecs is rewritten to the actual value a
+    // duplicate webhook computes zero delta and refunds nothing.
+    const actual = payload.actualDurationSeconds;
+    let correctedDuration = job.durationSecs;
+    let correctedCredits  = job.creditsCharged;
+
+    if (typeof actual === 'number' && actual > 0 && actual < job.durationSecs) {
+      const mode      = resolveCartoonMode({ type: job.type });
+      const newCredits = getCartoonCreditsByMode(mode, actual);
+      const delta      = parseFloat((job.creditsCharged - newCredits).toFixed(2));
+
+      if (delta > 0 && !job.creditRefunded) {
+        await refundCredits({
+          userId:  job.userId,
+          credits: delta,
+          module:  'CARTOON',
+          description: `Refund: cartoon generated ${actual}s of ${job.durationSecs}s requested`,
+        });
+      }
+
+      correctedDuration = actual;
+      correctedCredits  = newCredits;
+
+      logger.info(
+        `Cartoon job ${jobId}: provider produced ${actual}s (requested ${job.durationSecs}s) — refunded ${delta} credits`,
+      );
+    }
+
     await db
       .update(cartoonJobs)
       .set({
         status: 'COMPLETED',
-        outputUrl: payload.outputUrl,
-        thumbnailUrl: payload.thumbnailUrl,
-        provider: payload.provider,
+        outputUrl:      payload.outputUrl,
+        thumbnailUrl:   payload.thumbnailUrl,
+        provider:       payload.provider,
+        durationSecs:   correctedDuration,
+        creditsCharged: correctedCredits,
         completedAt: new Date(),
-        updatedAt: new Date(),
+        updatedAt:   new Date(),
       })
       .where(eq(cartoonJobs.id, jobId));
 

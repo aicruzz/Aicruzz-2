@@ -130,11 +130,12 @@ export async function handleWebhook(req: Request, res: Response): Promise<void> 
   res.json({ received: true });
 
   await cartoonService.handleWebhook(jobId, {
-    success:      body.success,
-    routerStatus: body.result?.raw?.status ?? (body.success ? 'COMPLETED' : 'FAILED'),
-    outputUrl:    body.result?.raw?.output_url,
-    thumbnailUrl: body.result?.raw?.thumbnail_url,
-    provider:     body.result?.provider,
-    error:        body.result?.raw?.error,
+    success:               body.success,
+    routerStatus:          body.result?.raw?.status ?? (body.success ? 'COMPLETED' : 'FAILED'),
+    outputUrl:             body.result?.raw?.output_url,
+    thumbnailUrl:          body.result?.raw?.thumbnail_url,
+    provider:              body.result?.provider,
+    actualDurationSeconds: body.result?.raw?.duration_seconds,
+    error:                 body.result?.raw?.error,
   });
 }

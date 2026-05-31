@@ -22,6 +22,7 @@ import {
 import toast from "react-hot-toast";
 import { videoApi, assetsApi, getApiError } from "@/lib/api";
 import { consumeBannerPrefill } from "@/lib/bannerPrefill";
+import { parseDurationFromPrompt, normalizeDuration } from "@/lib/duration";
 import { SuggestedSettings } from "@/components/banners/SuggestedSettings";
 import { cn } from "@/lib/cn";
 import {
@@ -230,6 +231,7 @@ export function VideoStudio() {
   const [quality, setQuality] = useState("STANDARD");
   const [resolution, setResolution] = useState("HD_720P");
   const [duration, setDuration] = useState(5);
+  const [durationHint, setDurationHint] = useState<string | null>(null);
   const [image, setImage] = useState<AssetValue | null>(null);
   const [voice, setVoice] = useState<VideoVoiceSelection>({
     voiceMode: "NONE",
@@ -271,7 +273,7 @@ export function VideoStudio() {
     if (m.resolution && ["SD_480P", "HD_720P", "FHD_1080P"].includes(m.resolution))
       s.resolution = m.resolution;
     if (typeof m.durationSecs === "number" && Number.isFinite(m.durationSecs))
-      s.duration = Math.min(30, Math.max(5, Math.round(m.durationSecs)));
+      s.duration = Math.min(10, Math.max(5, Math.round(m.durationSecs)));
     if (m.voiceMode && ["NONE", "AI", "UPLOAD", "CLONE"].includes(m.voiceMode))
       s.voiceMode = m.voiceMode as VideoVoiceSelection["voiceMode"];
     if (Object.keys(s).length > 0) setSuggested(s);
@@ -334,6 +336,18 @@ export function VideoStudio() {
     }, 300);
     return () => clearTimeout(t);
   }, [duration, resolution, quality]);
+
+  // Auto-detect duration from the prompt and populate the duration field.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const raw = parseDurationFromPrompt(prompt);
+      if (raw === null) return;
+      const { value, clamped } = normalizeDuration(raw, 5, 10);
+      setDuration(value);
+      setDurationHint(clamped ? 'Duration adjusted to supported maximum (10 seconds).' : null);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [prompt]);
 
   function persistSetups(next: Setup[]) {
     setSetups(next);
@@ -479,7 +493,14 @@ export function VideoStudio() {
               onChange={setResolution}
               options={RESOLUTIONS}
             />
-            <DurationSlider value={duration} onChange={setDuration} />
+            <DurationSlider
+              value={duration}
+              max={10}
+              onChange={(v) => { setDuration(v); setDurationHint(null); }}
+            />
+            {durationHint && (
+              <p className="mt-1 text-[11px] text-yellow-400">{durationHint}</p>
+            )}
             <VoiceNarrationPanel value={voice} onChange={setVoice} />
           </Card>
         </Reveal>

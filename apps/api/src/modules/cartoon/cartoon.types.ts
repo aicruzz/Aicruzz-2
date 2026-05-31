@@ -22,21 +22,23 @@ export interface WebhookBody {
     provider:  string;
     latencyMs: number;
     raw?: {
-      status:         'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
-      output_url?:    string;
-      thumbnail_url?: string;
-      error?:         string;
+      status:           'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+      output_url?:      string;
+      thumbnail_url?:   string;
+      duration_seconds?: number | null;
+      error?:           string;
     };
   };
 }
 
 export interface WebhookPayload {
-  success:       boolean;
-  routerStatus:  'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
-  outputUrl?:    string;
-  thumbnailUrl?: string;
-  provider?:     string;
-  error?:        string;
+  success:                boolean;
+  routerStatus:           'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  outputUrl?:             string;
+  thumbnailUrl?:          string;
+  provider?:              string;
+  actualDurationSeconds?: number | null;
+  error?:                 string;
 }
 
 export interface CreateSceneInput {

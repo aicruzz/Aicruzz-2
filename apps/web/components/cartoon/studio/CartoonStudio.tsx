@@ -5,6 +5,7 @@ import { Wand2, Coins, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { cartoonApi, assetsApi, getApiError } from '@/lib/api';
 import { consumeBannerPrefill } from '@/lib/bannerPrefill';
+import { parseDurationFromPrompt, normalizeDuration } from '@/lib/duration';
 import { SuggestedSettings } from '@/components/banners/SuggestedSettings';
 import {
   Tabs, Card, Button, Badge, ErrorBoundary, type TabItem,
@@ -63,6 +64,7 @@ export function CartoonStudio() {
   const [form, setForm] = useState<FormState>(() => freshForm('ANIMATED_AD'));
   const [characters, setCharacters] = useState<{ id: string; name: string }[]>([]);
   const [templates, setTemplates] = useState<{ id: string; name: string }[]>([]);
+  const [durationHint, setDurationHint] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
@@ -133,7 +135,7 @@ export function CartoonStudio() {
     if (m.aspectRatio && ['16:9', '9:16', '1:1', '4:3'].includes(m.aspectRatio))
       s.aspect = m.aspectRatio;
     if (typeof m.durationSecs === 'number' && Number.isFinite(m.durationSecs))
-      s.duration = Math.min(30, Math.max(5, Math.round(m.durationSecs)));
+      s.duration = Math.min(10, Math.max(5, Math.round(m.durationSecs)));
     if (m.voiceMode && ['NONE', 'UPLOAD', 'CLONE', 'AI'].includes(m.voiceMode))
       s.voiceMode = m.voiceMode as VoiceSelection['voiceMode'];
     if (Object.keys(s).length > 0) setSuggested(s);
@@ -157,6 +159,20 @@ export function CartoonStudio() {
     setSuggested(null);
     toast.success('Settings applied');
   }
+
+  // Auto-detect duration from the prompt and populate the duration field.
+  useEffect(() => {
+    if (!cfg.fields.duration) return;
+    const t = setTimeout(() => {
+      const raw = parseDurationFromPrompt(form.prompt);
+      if (raw === null) return;
+      const { value, clamped } = normalizeDuration(raw, 5, 10);
+      set({ duration: value });
+      setDurationHint(clamped ? 'Duration adjusted to supported maximum (10 seconds).' : null);
+    }, 400);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.prompt, cfg.fields.duration]);
 
   const credits = useMemo(
     () => estimateCredits(mode, form.duration),
@@ -319,7 +335,16 @@ export function CartoonStudio() {
             </div>
 
             {cfg.fields.duration && (
-              <DurationSlider value={form.duration} onChange={(v) => set({ duration: v })} />
+              <>
+                <DurationSlider
+                  value={form.duration}
+                  max={10}
+                  onChange={(v) => { set({ duration: v }); setDurationHint(null); }}
+                />
+                {durationHint && (
+                  <p className="mt-1 text-[11px] text-yellow-400">{durationHint}</p>
+                )}
+              </>
             )}
 
             {cfg.fields.template && templates.length > 0 && (
