@@ -33,10 +33,16 @@ import {
 import { useAvatarPipeline } from "@/hooks/useAvatarPipeline";
 import { useAuth } from "@/contexts/AuthContext";
 
-const WS_URL = process.env.NEXT_PUBLIC_WEBRTC_WS_URL ?? "ws://localhost:4002";
+// Fallback MUST be a scheme-qualified URL — a bare host produces an invalid
+// WebSocket() URL and a scheme-less HTTP derivation. Production overrides this
+// via NEXT_PUBLIC_WEBRTC_WS_URL; the default points at the deployed service so
+// a missing env var still yields a valid (not localhost) endpoint.
+const WS_URL =
+  process.env.NEXT_PUBLIC_WEBRTC_WS_URL ??
+  "wss://aicruzzwebrtc-production.up.railway.app";
 // HTTP origin of the same webrtc service (avatar proxy). Derived from the
-// WS URL so a single env var configures both.
-const WEBRTC_HTTP_URL = WS_URL.replace(/^ws/, "http");
+// WS URL so a single env var configures both. ws:// → http://, wss:// → https://
+const WEBRTC_HTTP_URL = WS_URL.replace(/^ws(s?):/, "http$1:");
 const CREDITS_PER_SECOND = 0.2;
 const HANDSHAKE_TIMEOUT_MS = 8000;
 const MAX_RECONNECT_ATTEMPTS = 6;

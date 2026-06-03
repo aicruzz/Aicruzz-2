@@ -76,7 +76,14 @@ class GpuAvatarProvider implements AvatarReenactmentProvider {
           enhance_face: opts.enhance ?? true,
           face_blend: opts.blend ?? 1.0,
         },
-        { timeout: 220 }, // per-frame budget (~12–15fps target)
+        // Per-frame budget. Warm LivePortrait inference is ~205ms; with the
+        // ~160KB round trip (34KB frame up / 126KB processed down) over the
+        // Railway→EC2 hop, 220ms was below the floor and aborted every frame
+        // (ECONNABORTED → processed:false → client standby). 1200ms clears
+        // warm frames with headroom; the client AbortController (1500ms)
+        // bounds overall latency. Cold first frame (~3.5s) still misses once,
+        // then the warmed engine succeeds on the next frame.
+        { timeout: 1200 },
       );
       const out = res.data as { processed_frame?: string };
       if (!out?.processed_frame) {
