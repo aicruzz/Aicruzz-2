@@ -96,6 +96,19 @@ export function initQueue(router: RouterFn): void {
       totalLatencyMs: 0,
       strategy: job.data.request.strategy,
       fallbackUsed: false,
+      // Queue-level failure (job threw before returning a RouteResponse) — no
+      // recovery diagnostics available; record the internal reason only.
+      diagnostics: {
+        selectedProvider: null,
+        actualProviderUsed: null,
+        providerSubstituted: false,
+        substitutionReason: null,
+        failoverAttempts: 0,
+        fallbackProvider: null,
+        providerErrorCode: null,
+        providerErrorMessage: null,
+        finalFailureReason: job.failedReason ?? err.message ?? 'QUEUE_FAILURE',
+      },
     };
 
     console.error("[Queue] Job failure detail:", job.failedReason ?? err.message);
@@ -129,6 +142,8 @@ function buildWebhookPayload(result: RouteResponse, jobData: QueueJob): object {
       totalLatencyMs: result.totalLatencyMs,
       strategy: result.strategy,
       fallbackUsed: result.fallbackUsed,
+      // Internal-only recovery/failover diagnostics (never shown to users).
+      diagnostics: raw?.diagnostics ?? null,
     };
   }
 
@@ -161,6 +176,8 @@ function buildWebhookPayload(result: RouteResponse, jobData: QueueJob): object {
     totalLatencyMs: result.totalLatencyMs,
     strategy: result.strategy,
     fallbackUsed: result.fallbackUsed,
+    // Internal-only recovery/failover diagnostics (never shown to users).
+    diagnostics: raw?.diagnostics ?? null,
   };
 }
 

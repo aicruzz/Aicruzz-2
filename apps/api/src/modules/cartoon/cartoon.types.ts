@@ -14,6 +14,22 @@ export interface UpdateTemplateInput {
   isPublic?: boolean;
   thumbnailUrl?: string;
 }
+/**
+ * Internal-only provider recovery / failover diagnostics from the AI Router.
+ * Stored verbatim for observability — never surfaced to end users.
+ */
+export interface RecoveryDiagnostics {
+  selectedProvider: string | null;
+  actualProviderUsed: string | null;
+  providerSubstituted: boolean;
+  substitutionReason: string | null;
+  failoverAttempts: number;
+  fallbackProvider: string | null;
+  providerErrorCode: string | null;
+  providerErrorMessage: string | null;
+  finalFailureReason: string | null;
+}
+
 export interface WebhookBody {
   success: boolean;
   provider?: string;
@@ -29,6 +45,8 @@ export interface WebhookBody {
       error?:           string;
     };
   };
+  // Additive, internal-only (may be absent on legacy/queue-level failures).
+  diagnostics?: RecoveryDiagnostics | null;
 }
 
 export interface WebhookPayload {
@@ -39,6 +57,8 @@ export interface WebhookPayload {
   provider?:              string;
   actualDurationSeconds?: number | null;
   error?:                 string;
+  // Internal-only recovery/failover diagnostics (persisted, not user-facing).
+  diagnostics?:           RecoveryDiagnostics | null;
 }
 
 export interface CreateSceneInput {

@@ -1,5 +1,5 @@
 import { BaseProvider } from '../providers/base.provider';
-import { FallbackService } from './fallback.service';
+import { FallbackService, emptyDiagnostics } from './fallback.service';
 import type { FallbackOptions, FallbackOutcome } from './fallback.service';
 import type { ProviderId, ProviderResult, RouteRequest } from '../types';
 import { uploadKeyframe, isMediaStorageConfigured } from '../utils/media-storage';
@@ -58,6 +58,10 @@ function failure(
     attempts,
     fallbackUsed: false,
     lastError: error,
+    diagnostics: {
+      ...emptyDiagnostics(),
+      providerErrorMessage: error,
+    },
   };
 }
 

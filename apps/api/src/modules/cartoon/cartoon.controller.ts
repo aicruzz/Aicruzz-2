@@ -137,5 +137,6 @@ export async function handleWebhook(req: Request, res: Response): Promise<void> 
     provider:              body.result?.provider,
     actualDurationSeconds: body.result?.raw?.duration_seconds,
     error:                 body.result?.raw?.error,
+    diagnostics:           body.diagnostics ?? null,
   });
 }

@@ -44,6 +44,22 @@ export interface VideoJobDto {
  * Raw webhook body shape sent by the AI router.
  * The router calls this webhook on EVERY status change (QUEUED, PROCESSING, COMPLETED, FAILED).
  */
+/**
+ * Internal-only provider recovery / failover diagnostics emitted by the AI
+ * Router. Stored verbatim for observability — never surfaced to end users.
+ */
+export interface RecoveryDiagnostics {
+  selectedProvider: string | null;
+  actualProviderUsed: string | null;
+  providerSubstituted: boolean;
+  substitutionReason: string | null;
+  failoverAttempts: number;
+  fallbackProvider: string | null;
+  providerErrorCode: string | null;
+  providerErrorMessage: string | null;
+  finalFailureReason: string | null;
+}
+
 export interface WebhookBody {
   requestId: string;
   success:   boolean;
@@ -67,6 +83,8 @@ export interface WebhookBody {
   totalLatencyMs: number;
   strategy:       string;
   fallbackUsed:   boolean;
+  // Additive, internal-only (may be absent on legacy/queue-level failures).
+  diagnostics?:   RecoveryDiagnostics | null;
 }
 
 /**
@@ -81,6 +99,8 @@ export interface WebhookPayload {
   // Actual clip length generated; used to correct stored duration + billing.
   actualDurationSeconds?: number;
   error?:        string;
+  // Internal-only recovery/failover diagnostics (persisted, not user-facing).
+  diagnostics?:  RecoveryDiagnostics | null;
 }
 
 /**

@@ -526,6 +526,7 @@ export async function handleWebhook(jobId: string, payload: WebhookPayload) {
         provider:       payload.provider,
         durationSecs:   correctedDuration,
         creditsCharged: correctedCredits,
+        diagnostics:    payload.diagnostics ?? null,
         completedAt: new Date(),
         updatedAt:   new Date(),
       })
@@ -573,6 +574,10 @@ export async function handleWebhook(jobId: string, payload: WebhookPayload) {
       }
     }
   } else if (payload.routerStatus === 'FAILED') {
+    // Credit-safety invariant: cartoon pricing is provider-agnostic, so
+    // provider substitution/failover never costs more than was originally
+    // charged — the only credit movement here is a refund. We never charge
+    // again and never create a negative balance.
     if (!job.creditRefunded) {
       await refundCredits({
         userId: job.userId,
@@ -590,6 +595,7 @@ export async function handleWebhook(jobId: string, payload: WebhookPayload) {
       .set({
         status: 'FAILED',
         errorMessage: CLIENT_CARTOON_GENERATION_FAILED,
+        diagnostics: payload.diagnostics ?? null,
         creditRefunded: true,
         completedAt: new Date(),
         updatedAt: new Date(),

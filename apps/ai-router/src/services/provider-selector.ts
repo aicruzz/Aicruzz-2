@@ -1,6 +1,8 @@
 import { BaseProvider } from '../providers/base.provider';
 import { HealthMonitor } from '../health/health.monitor';
 import { resolveVideoQuality } from './quality-router';
+import { reorderByCapability } from './provider-capability';
+import type { SubstitutionReason } from './provider-capability';
 import type {
   RouteRequest,
   ProviderId,
@@ -100,6 +102,11 @@ const MODULE_ROUTES: Record<AiModule, Record<RouteRequest['strategy'], ProviderI
 export interface SelectionResult {
   chain: BaseProvider[];
   reason: string;
+  // Layer 1 observability: the quality-derived primary before any capability
+  // reorder, and whether/why it was substituted for a compatible provider.
+  selectedPrimary?: ProviderId;
+  substituted?: boolean;
+  substitutionReason?: SubstitutionReason;
 }
 
 export class ProviderSelector {
@@ -212,12 +219,25 @@ export class ProviderSelector {
       chain = this.enabledSupporting(module);
     }
 
+    // Layer 1 — capability-aware reorder (VIDEO/CARTOON only). Promotes a
+    // provider that can actually fulfil the request to primary, before
+    // generation starts. Never drops providers or changes cost.
+    const reorder = reorderByCapability(chain, request);
+    chain = reorder.chain;
+
+    const baseReason =
+      module === 'VIDEO'
+        ? `module=VIDEO tier=${request.qualityMode ?? 'STANDARD'} → ${chain.map((p) => p.id).join('→') || 'none'}`
+        : `module=${module} strategy=${strategy} → ${chain.map((p) => p.id).join('→') || 'none'}`;
+
     return {
       chain,
-      reason:
-        module === 'VIDEO'
-          ? `module=VIDEO tier=${request.qualityMode ?? 'STANDARD'} → ${chain.map((p) => p.id).join('→') || 'none'}`
-          : `module=${module} strategy=${strategy} → ${chain.map((p) => p.id).join('→') || 'none'}`,
+      reason: reorder.substituted
+        ? `${baseReason} [substituted ${reorder.selectedPrimary}→${chain[0]?.id} reason=${reorder.substitutionReason}]`
+        : baseReason,
+      selectedPrimary: reorder.selectedPrimary ?? undefined,
+      substituted: reorder.substituted,
+      substitutionReason: reorder.substitutionReason,
     };
   }
 

@@ -70,6 +70,7 @@ export async function handleWebhook(req: Request, res: Response): Promise<void> 
     provider:     wb.result.provider,
     actualDurationSeconds: wb.result.raw.duration_seconds,
     error:        wb.result.raw.error,
+    diagnostics:  wb.diagnostics ?? null,
   });
 }
 

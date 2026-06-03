@@ -19,6 +19,7 @@ import {
   type CreateVideoJobInput,
   type VideoJobDto,
   type JobStatus,
+  type RecoveryDiagnostics,
 } from './video.types';
 import {
   publishVideoEvent,
@@ -37,6 +38,8 @@ export interface WebhookPayload {
   // used to correct stored duration + refund the billing delta.
   actualDurationSeconds?: number;
   error?:        string;
+  // Internal-only recovery/failover diagnostics (persisted, not user-facing).
+  diagnostics?:  RecoveryDiagnostics | null;
 }
 
 async function emit(event: Omit<VideoEvent, 'ts'>): Promise<void> {
@@ -347,6 +350,7 @@ export async function handleJobWebhook(
         provider: result.provider ?? null,
         durationSeconds: correctedDuration,
         creditsCharged: correctedCredits,
+        diagnostics: result.diagnostics ?? null,
         completedAt: new Date(),
         updatedAt: new Date(),
       })
@@ -373,7 +377,12 @@ export async function handleJobWebhook(
     return;
   }
 
-  // FAILED or success=false
+  // FAILED or success=false.
+  // Credit-safety invariant: video pricing is provider-agnostic
+  // (calculateVideoCredits depends only on duration/resolution/quality), so
+  // provider substitution/failover never costs more than was originally
+  // charged — the only credit movement is a refund. We never charge again here
+  // and never create a negative balance.
   if (!job.creditRefunded) {
     await refundCredits({
       userId: job.userId,
@@ -388,6 +397,7 @@ export async function handleJobWebhook(
     .set({
       status: 'FAILED',
       errorMessage: CLIENT_VIDEO_GENERATION_FAILED,
+      diagnostics: result.diagnostics ?? null,
       creditRefunded: true,
       completedAt: new Date(),
       updatedAt: new Date(),
@@ -489,6 +499,7 @@ export async function getJobStatus(jobId: string, userId: string): Promise<Video
             outputUrl: (raw.output_url as string | undefined) ?? r.outputUrl,
             thumbnailUrl: (raw.thumbnail_url as string | undefined) ?? r.thumbnailUrl,
             provider: routerStatus.result.provider,
+            diagnostics: (raw.diagnostics as RecoveryDiagnostics | undefined) ?? null,
           });
           const updated = await db.query.videoJobs.findFirst({
             where: and(eq(videoJobs.id, jobId), eq(videoJobs.userId, userId)),

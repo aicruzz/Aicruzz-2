@@ -1,5 +1,6 @@
 import { BaseProvider } from '../providers/base.provider';
-import type { ProviderResult, RouteRequest } from '../types';
+import type { ProviderId, ProviderResult, RouteRequest } from '../types';
+import { parseProviderErrorCode } from './provider-capability';
 
 /**
  * FallbackService
@@ -16,7 +17,7 @@ import type { ProviderResult, RouteRequest } from '../types';
  * scoring system stays accurate.
  */
 
-const TRANSIENT_ERROR = /timeout|etimedout|econnreset|econnrefused|socket hang up|\b429\b|rate.?limit|\b5\d\d\b|overloaded|temporarily|unavailable/i;
+const TRANSIENT_ERROR = /timeout|etimedout|econnreset|econnrefused|socket hang up|\b429\b|rate.?limit|\b5\d\d\b|overloaded|temporarily|unavailable|quota/i;
 
 export interface FallbackOptions {
   /** Hard cap on total attempts across the whole chain. */
@@ -27,12 +28,28 @@ export interface FallbackOptions {
   onOutcome?: (providerId: BaseProvider['id'], success: boolean) => void;
 }
 
+/** Internal failover diagnostics (NOT part of the public RouteResponse). */
+export interface FallbackDiagnostics {
+  /** Number of provider switches across the chain (0 when the first wins). */
+  failoverAttempts: number;
+  /** Coarse error code of the last failing attempt, if any. */
+  providerErrorCode: string | null;
+  /** Raw error message of the last failing attempt, if any. */
+  providerErrorMessage: string | null;
+}
+
 export interface FallbackOutcome {
   result: ProviderResult;
   provider: BaseProvider['id'];
   attempts: number;
   fallbackUsed: boolean;
   lastError: string;
+  diagnostics: FallbackDiagnostics;
+}
+
+/** Empty diagnostics for short-circuit outcomes (e.g. PipelineService guards). */
+export function emptyDiagnostics(): FallbackDiagnostics {
+  return { failoverAttempts: 0, providerErrorCode: null, providerErrorMessage: null };
 }
 
 export class FallbackService {
@@ -47,9 +64,11 @@ export class FallbackService {
     let attempts = 0;
     let lastError = 'No providers available';
     let lastResult: ProviderResult | null = null;
+    const providersTried = new Set<ProviderId>();
 
     for (let p = 0; p < chain.length && attempts < maxAttempts; p++) {
       const provider = chain[p];
+      providersTried.add(provider.id);
 
       for (
         let retry = 0;
@@ -68,6 +87,12 @@ export class FallbackService {
             attempts,
             fallbackUsed: p > 0,
             lastError: '',
+            diagnostics: {
+              // Provider switches it took to reach the winner.
+              failoverAttempts: Math.max(0, providersTried.size - 1),
+              providerErrorCode: null,
+              providerErrorMessage: null,
+            },
           };
         }
 
@@ -108,6 +133,11 @@ export class FallbackService {
       attempts,
       fallbackUsed: attempts > 1,
       lastError,
+      diagnostics: {
+        failoverAttempts: Math.max(0, providersTried.size - 1),
+        providerErrorCode: parseProviderErrorCode(lastError),
+        providerErrorMessage: lastError,
+      },
     };
   }
 }

@@ -7,6 +7,7 @@ import {
   doublePrecision,
   integer,
   json,
+  jsonb,
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
@@ -428,6 +429,9 @@ export const videoJobs = pgTable(
     outputUrl: text('output_url'),
     thumbnailUrl: text('thumbnail_url'),
     errorMessage: text('error_message'),
+    // Internal-only provider recovery/failover diagnostics (nullable, additive).
+    // Never surfaced to end users — observability & troubleshooting only.
+    diagnostics: jsonb('diagnostics'),
     queueJobId: text('queue_job_id'),
     startedAt: timestamp('started_at'),
     completedAt: timestamp('completed_at'),
@@ -582,6 +586,9 @@ export const cartoonJobs = pgTable(
     outputUrl: text('output_url'),
     thumbnailUrl: text('thumbnail_url'),
     errorMessage: text('error_message'),
+    // Internal-only provider recovery/failover diagnostics (nullable, additive).
+    // Never surfaced to end users — observability & troubleshooting only.
+    diagnostics: jsonb('diagnostics'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },

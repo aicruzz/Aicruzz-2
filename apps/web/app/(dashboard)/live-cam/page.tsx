@@ -33,7 +33,7 @@ import {
 import { useAvatarPipeline } from "@/hooks/useAvatarPipeline";
 import { useAuth } from "@/contexts/AuthContext";
 
-const WS_URL = process.env.NEXT_PUBLIC_WEBRTC_WS_URL ?? "aicruzzwebrtc-production.up.railway.app";
+const WS_URL = process.env.NEXT_PUBLIC_WEBRTC_WS_URL ?? "ws://localhost:4002";
 // HTTP origin of the same webrtc service (avatar proxy). Derived from the
 // WS URL so a single env var configures both.
 const WEBRTC_HTTP_URL = WS_URL.replace(/^ws/, "http");
@@ -354,7 +354,7 @@ export default function LiveCamPage() {
         rtpCapabilities: RtpCapabilities;
       }>("join", { roomId: roomIdRef.current, sessionId: sessionIdRef.current });
       if (sessionEpochRef.current !== myEpoch) return;
-
+ 
 
       const device = new Device();
       await device.load({ routerRtpCapabilities: joinReply.rtpCapabilities });
