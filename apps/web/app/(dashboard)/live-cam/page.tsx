@@ -38,7 +38,7 @@ import { useAuth } from "@/contexts/AuthContext";
 // via NEXT_PUBLIC_WEBRTC_WS_URL; the default points at the deployed service so
 // a missing env var still yields a valid (not localhost) endpoint.
 const WS_URL =
-  process.env.NEXT_PUBLIC_WEBRTC_WS_URL ??
+  process.env.NEXT_PUBLIC_WEBRTC_WS_URL?.trim() ||
   "wss://aicruzzwebrtc-production.up.railway.app";
 // HTTP origin of the same webrtc service (avatar proxy). Derived from the
 // WS URL so a single env var configures both. ws:// → http://, wss:// → https://
