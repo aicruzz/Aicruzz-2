@@ -108,7 +108,7 @@ pm2 logs gpu-api
 2349061484957
 
 ```bash
-# Terminal 1 — API
+# Terminal 1 — API. Dont START again
 cd apps/api && ../../node_modules/.bin/ts-node-dev --respawn --transpile-only src/index.ts
 
 # Terminal 2 — AI Router
@@ -118,15 +118,35 @@ cd apps/ai-router && ../../node_modules/.bin/ts-node-dev --respawn --transpile-o
 cd apps/webrtc && ../../node_modules/.bin/ts-node-dev --respawn --transpile-only src/index.ts
 
 
-# Terminal 4 — Worker (Python)
+# Terminal 4 — Worker (Python). Dont START again
 cd apps/worker && pip install -e . && uvicorn app.main:app --reload --port 8000 or uvicorn app.main:app --reload --port 8000
 
 uvicorn apps.worker.app.main:app --host 0.0.0.0 --port 8000
 
-# Terminal 5 — Web
+# Terminal 5 — Web. Dont START again
 cd apps/web && ../../node_modules/.bin/next dev
-```
+
+# Only use for Web & API
 npm run dev
+```
+```bash
+Don't START WORKER again
+
+# If you deploy new code and want to restart the worker:
+sudo systemctl restart aicruzz-worker
+
+# To stop it:
+sudo systemctl stop aicruzz-worker
+
+# To start it again:
+sudo systemctl start aicruzz-worker
+
+# To watch logs:
+journalctl -u aicruzz-worker -f
+
+# To check status:
+sudo systemctl status aicruzz-worker
+```
 
 source venv/bin/activate
 

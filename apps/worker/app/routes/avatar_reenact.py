@@ -189,6 +189,7 @@ async def avatar_reenact(req: AvatarReenactRequest) -> AvatarReenactResponse:
             return engine.process(
                 avatar_url=req.avatar_url,
                 frame=req.frame,
+                session_id=sid,
             )
 
         out_b64, latency_ms, reason = await asyncio.to_thread(run_inference)
