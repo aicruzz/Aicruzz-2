@@ -129,8 +129,9 @@ cd apps/web && ../../node_modules/.bin/next dev
 # Only use for Web & API
 npm run dev
 ```
+
 ```bash
-Don't START WORKER again
+# Don't START WORKER again
 
 # If you deploy new code and want to restart the worker:
 sudo systemctl restart aicruzz-worker
@@ -158,8 +159,26 @@ Open `http://localhost:3000`.
 
 - Admin: `admin@aicruzz.com` / `Admin@123!`
 - User: `demo@aicruzz.com` / `Demo@123!` (starts with 500 credits)
-
+# test@aicruzz.com / @Test123
 ---
+
+```bash
+# When database url changed, run this:
+npx drizzle-kit push
+
+# or:
+
+npm run db:migrate
+
+# (depends on your setup)
+
+# Or
+
+npm run db:push
+
+# After that run:
+npm run db:seed
+```
 
 ## Production Deployment. curl http://localhost:4001/health
 

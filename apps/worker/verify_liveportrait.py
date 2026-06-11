@@ -49,14 +49,18 @@ def main() -> None:
         die(f"engine not ready (avatar_available=False): {info.not_ready_reason}")
     print(f"[{OK}] engine.ready=True  device={info.device}  model={info.model}")
 
-    # --- 2. wrapper/cropper expose every method the engine calls -------------
+    # --- 2. API surface the engine actually calls ---------------------------
+    # NOTE: prepare_source/get_kp_info/transform_keypoint/extract_feature_3d/
+    # warp_decode/stitching are WRAPPER methods.  get_rotation_matrix,
+    # prepare_paste_back and paste_back are FREE FUNCTIONS in src.utils.camera /
+    # src.utils.crop — NOT wrapper methods — so they are verified at their
+    # modules / on the engine's bound `_fn` handles, never on the wrapper.
     wrapper = engine._wrapper
     cropper = engine._cropper
 
     required_wrapper = [
         "prepare_source", "get_kp_info", "transform_keypoint",
-        "extract_feature_3d", "warp_decode", "get_rotation_matrix",
-        "stitching", "prepare_paste_back", "paste_back",
+        "extract_feature_3d", "warp_decode", "stitching",
     ]
     missing = [m for m in required_wrapper if not callable(getattr(wrapper, m, None))]
     if missing:
@@ -67,10 +71,37 @@ def main() -> None:
         die("cropper missing crop_source_image (version mismatch)")
     print(f"[{OK}] cropper.crop_source_image present")
 
-    if getattr(wrapper, "mask_crop", None) is None:
-        print("[warn] wrapper.mask_crop is None — paste-back falls back to raw crop")
+    # Free functions — verify both that the engine bound them at init AND that
+    # they import from the expected modules in the *deployed* tree. Self-audits:
+    # if a module path differs, it reports where the symbol is actually found.
+    free_fns = {
+        "get_rotation_matrix": ("src.utils.camera", engine._get_rotation_matrix_fn),
+        "prepare_paste_back": ("src.utils.crop", engine._prepare_paste_back_fn),
+        "paste_back": ("src.utils.crop", engine._paste_back_fn),
+    }
+    import importlib
+    for name, (mod_path, bound) in free_fns.items():
+        if not callable(bound):
+            die(f"engine did not bind {name} at init (free-function import failed)")
+        try:
+            mod = importlib.import_module(mod_path)
+            found = callable(getattr(mod, name, None))
+        except Exception as e:
+            found = False
+            print(f"[warn] could not import {mod_path}: {e}")
+        loc = getattr(bound, "__module__", "?")
+        status = OK if found else "warn"
+        print(f"[{status}] free fn {name}() -> resolved from {loc} "
+              f"(expected {mod_path})")
+        if loc != mod_path:
+            print(f"       NOTE: deployed tree exposes {name} at {loc}, "
+                  f"not {mod_path} — engine uses the bound handle, so OK.")
+
+    mask = getattr(engine._inference_cfg, "mask_crop", None)
+    if mask is None:
+        print("[warn] inference_cfg.mask_crop is None — paste-back falls back to raw crop")
     else:
-        print(f"[{OK}] wrapper.mask_crop present (paste-back mask available)")
+        print(f"[{OK}] inference_cfg.mask_crop present (paste-back mask available)")
 
     # --- 3 & 4. round-trip + output dimensions match avatar frame -----------
     if not avatar:
