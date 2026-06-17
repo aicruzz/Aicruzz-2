@@ -50,6 +50,20 @@ export const createVideoJobValidator = [
     .optional()
     .isInt({ min: 12, max: 60 })
     .withMessage('FPS must be 12–60'),
+
+  // Video Agent extensions (optional, additive).
+  body('parentJobId')
+    .optional()
+    .isString()
+    .trim()
+    .notEmpty()
+    .withMessage('parentJobId must be a non-empty string'),
+
+  body('variationIndex')
+    .optional()
+    .isInt({ min: 0, max: 8 })
+    .toInt()
+    .withMessage('variationIndex must be 0–8'),
 ];
 
 export const listJobsValidator = [

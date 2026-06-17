@@ -27,6 +27,21 @@ import {
   type VideoEventStage,
   type VideoEventStatus,
 } from './video.events';
+import {
+  planVideoGeneration,
+  buildVariationPrompt,
+  type VideoMode,
+} from './video-agent';
+import {
+  createLedger,
+  finalizeLedger,
+  releaseLedger,
+  attemptsFromDiagnostics,
+} from './video-ledger';
+import {
+  getJobForContinuation,
+  selectContinuationFrame,
+} from './continuation';
 
 export interface WebhookPayload {
   success:       boolean;
@@ -72,6 +87,37 @@ export async function createVideoJob(
   userId: string,
   input: CreateVideoJobInput,
 ): Promise<VideoJobDto> {
+  // 0. Resolve the mode and, for "Continue editing", the best representative
+  // frame of the previous project (frame-based continuation — providers don't
+  // do video-to-video yet, but the agent routes by capability so a future v2v
+  // provider would be used automatically).
+  let inputImageUrl = input.inputImageUrl;
+  const parentJobId = input.parentJobId ?? null;
+  let mode: VideoMode = inputImageUrl ? 'IMAGE_TO_VIDEO' : 'TEXT_TO_VIDEO';
+  if (parentJobId) {
+    const parent = await getJobForContinuation(userId, parentJobId);
+    const frame = parent ? selectContinuationFrame(parent) : null;
+    if (frame) {
+      inputImageUrl = frame;
+      mode = 'CONTINUATION';
+    }
+  }
+
+  // 1. Intentional variation direction (server-side prompt engineering).
+  const conceptPrompt =
+    typeof input.variationIndex === 'number'
+      ? buildVariationPrompt(input.prompt, input.variationIndex)
+      : input.prompt;
+
+  // 2. Video Agent — plan + engineer the cinematic prompt. Provider-agnostic;
+  // the router selects the actual provider by capability + health.
+  const { prompt: engineeredPrompt, plan, op } = await planVideoGeneration(
+    conceptPrompt,
+    mode,
+  );
+
+  // 3. Pricing depends ONLY on quality (provider-independent). Reserve up-front;
+  // the execution ledger records the lifecycle for fair settlement / refunds.
   const creditsRequired = calculateVideoCredits(
     input.durationSeconds,
     input.resolution,
@@ -87,8 +133,10 @@ export async function createVideoJob(
       durationSeconds: input.durationSeconds,
       resolution: input.resolution,
       qualityMode: input.qualityMode,
+      mode,
     },
   });
+  const ledger = createLedger(creditsRequired, deduction.transactionId);
 
   const queueJobId = uuidv4();
 
@@ -98,7 +146,7 @@ export async function createVideoJob(
       userId,
       status: 'QUEUED',
       prompt: input.prompt,
-      inputImageUrl: input.inputImageUrl,
+      inputImageUrl,
       inputVideoUrl: input.inputVideoUrl,
       voiceEnabled: input.voiceEnabled,
       durationSeconds: input.durationSeconds,
@@ -107,6 +155,10 @@ export async function createVideoJob(
       creditsCharged: creditsRequired,
       queueJobId,
       startedAt: new Date(),
+      revisedPrompt: engineeredPrompt,
+      parentJobId,
+      variationIndex: input.variationIndex ?? null,
+      agentMeta: { mode, category: plan.category, op, plan, ledger },
     })
     .returning();
 
@@ -120,9 +172,10 @@ export async function createVideoJob(
       userId,
       module: 'VIDEO',
       strategy: routingStrategy,
-      prompt: input.prompt,
+      // The Video Agent's engineered, cinematic prompt — never the raw prompt.
+      prompt: engineeredPrompt,
       negativePrompt: input.negativePrompt,
-      inputImageUrl: input.inputImageUrl,
+      inputImageUrl,
       inputVideoUrl: input.inputVideoUrl,
       durationSeconds: input.durationSeconds,
       resolution: input.resolution,
@@ -188,6 +241,7 @@ export async function createVideoJob(
 
     return job as unknown as VideoJobDto;
   } catch (err) {
+    // Release the reservation (full refund) and settle the ledger.
     await refundCredits({
       userId,
       credits: creditsRequired,
@@ -202,6 +256,13 @@ export async function createVideoJob(
         status: 'FAILED',
         errorMessage: CLIENT_JOB_SUBMIT_FAILED,
         creditRefunded: true,
+        agentMeta: {
+          mode,
+          category: plan.category,
+          op,
+          plan,
+          ledger: releaseLedger(ledger, creditsRequired),
+        },
         updatedAt: new Date(),
       })
       .where(eq(videoJobs.id, job.id));
@@ -226,6 +287,7 @@ export async function handleJobWebhook(
       durationSeconds: true,
       resolution: true,
       qualityMode: true,
+      agentMeta: true,
     },
   });
 
@@ -258,7 +320,12 @@ export async function handleJobWebhook(
     return;
   }
 
-  if (result.routerStatus === 'COMPLETED' && result.success) {
+  // Output validation: a "completed success" with no usable video URL is a
+  // real failure (empty/corrupt output) — fall through to the refund path so
+  // the user is never charged for a non-deliverable result.
+  const hasUsableOutput = !!(result.outputUrl && result.outputUrl.trim());
+
+  if (result.routerStatus === 'COMPLETED' && result.success && hasUsableOutput) {
     // The video models only produce fixed clip lengths (Pika 5s, Runway
     // 5s/10s). If the provider generated a shorter clip than the user asked
     // and paid for, correct the stored duration and refund the difference.
@@ -267,6 +334,7 @@ export async function handleJobWebhook(
     const actual = result.actualDurationSeconds;
     let correctedDuration = job.durationSeconds;
     let correctedCredits = job.creditsCharged;
+    let refundedDelta = 0;
 
     if (
       typeof actual === 'number' &&
@@ -289,6 +357,7 @@ export async function handleJobWebhook(
           module: 'VIDEO',
           description: `Refund: video generated ${actual}s of ${job.durationSeconds}s requested`,
         });
+        refundedDelta = delta;
       }
 
       correctedDuration = actual;
@@ -298,6 +367,16 @@ export async function handleJobWebhook(
         `Video job ${jobId}: provider produced ${actual}s (requested ${job.durationSeconds}s) — refunded ${delta} credits`,
       );
     }
+
+    // Settle the execution ledger (finalize): record actual cost + any refund.
+    const finalizedMeta = {
+      ...((job.agentMeta ?? {}) as Record<string, unknown>),
+      ledger: finalizeLedger((job.agentMeta as { ledger?: never })?.ledger, {
+        finalCredits: correctedCredits,
+        refundedCredits: refundedDelta,
+        attempts: attemptsFromDiagnostics(result.diagnostics),
+      }),
+    };
 
     // Talking-video render: if narration was produced at create time, lip-sync
     // it onto the finished (silent) clip → final merged MP4 with audio embedded.
@@ -351,6 +430,7 @@ export async function handleJobWebhook(
         durationSeconds: correctedDuration,
         creditsCharged: correctedCredits,
         diagnostics: result.diagnostics ?? null,
+        agentMeta: finalizedMeta,
         completedAt: new Date(),
         updatedAt: new Date(),
       })
@@ -392,12 +472,23 @@ export async function handleJobWebhook(
     });
   }
 
+  // Settle the execution ledger (release): full reservation refunded.
+  const releasedMeta = {
+    ...((job.agentMeta ?? {}) as Record<string, unknown>),
+    ledger: releaseLedger(
+      (job.agentMeta as { ledger?: never })?.ledger,
+      job.creditsCharged,
+      attemptsFromDiagnostics(result.diagnostics),
+    ),
+  };
+
   await db
     .update(videoJobs)
     .set({
       status: 'FAILED',
       errorMessage: CLIENT_VIDEO_GENERATION_FAILED,
       diagnostics: result.diagnostics ?? null,
+      agentMeta: releasedMeta,
       creditRefunded: true,
       completedAt: new Date(),
       updatedAt: new Date(),

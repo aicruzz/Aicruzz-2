@@ -36,6 +36,13 @@
       "when": 1781697034898,
       "tag": "0004_add_chat_message_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781726450553,
+      "tag": "0005_add_video_agent_meta",
+      "breakpoints": true
     }
   ]
 }

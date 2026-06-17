@@ -410,6 +410,27 @@ export const liveCamSessions = pgTable(
 // VIDEO JOBS
 // ─────────────────────────────────────────────────────────────
 
+// Video Agent metadata + execution ledger, persisted on a job (jsonb, nullable).
+// The ledger tracks the full credit lifecycle (reserve → attempts → finalize /
+// release) so it can later be swapped for a true held-balance wallet without any
+// Video Studio change. Free-form `plan` mirrors the agent's internal plan.
+export interface VideoExecutionLedger {
+  reservedCredits: number;
+  reservedTransactionId?: string | null;
+  attempts: Array<{ provider?: string; ok: boolean; at: string }>;
+  finalCredits?: number | null;
+  refundedCredits?: number | null;
+  settled?: boolean;
+  outcome?: 'finalized' | 'released' | null;
+}
+export interface VideoAgentMeta {
+  mode?: string;
+  category?: string;
+  op?: string;
+  plan?: unknown;
+  ledger?: VideoExecutionLedger;
+}
+
 export const videoJobs = pgTable(
   'video_jobs',
   {
@@ -432,6 +453,11 @@ export const videoJobs = pgTable(
     // Internal-only provider recovery/failover diagnostics (nullable, additive).
     // Never surfaced to end users — observability & troubleshooting only.
     diagnostics: jsonb('diagnostics'),
+    // Video Agent metadata (nullable, additive, backward compatible):
+    revisedPrompt: text('revised_prompt'),         // engineered prompt (Copy revised)
+    parentJobId: text('parent_job_id'),            // continuation / variation source
+    variationIndex: integer('variation_index'),    // A/B/C/D/E variation
+    agentMeta: jsonb('agent_meta').$type<VideoAgentMeta>(), // plan + execution ledger
     queueJobId: text('queue_job_id'),
     startedAt: timestamp('started_at'),
     completedAt: timestamp('completed_at'),

@@ -18,6 +18,11 @@ import {
   Trash2,
   ImagePlus,
   X,
+  Sparkles,
+  Copy,
+  Star,
+  Files,
+  Play,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { videoApi, assetsApi, getApiError } from "@/lib/api";
@@ -36,9 +41,9 @@ import {
 import { Reveal } from "@/components/ui/motion";
 import {
   PromptField,
-  QualitySelector,
   PillSelect,
 } from "@/components/cartoon/studio/StudioControls";
+import { VIDEO_QUALITY_OPTIONS } from "./videoQuality";
 import {
   AssetSlot,
   type AssetValue,
@@ -55,7 +60,7 @@ import {
 // Cloudinary upload helper
 // POST /api/video/upload-input — accepts image/jpeg, image/png, image/webp,
 // video/mp4, video/webm. Returns { success: true, data: { url } } where url
-// is a permanent res.cloudinary.com https:// URL safe for Runway / Pika.
+// is a permanent res.cloudinary.com https:// URL safe for any render engine.
 // ---------------------------------------------------------------------------
 async function uploadToCloudinary(file: File): Promise<string> {
   const r = await videoApi.uploadInput(file);
@@ -101,9 +106,14 @@ interface VideoJob {
   thumbnailUrl: string | null;
   errorMessage: string | null;
   createdAt: string;
+  // Video Agent metadata (restored from the DTO).
+  revisedPrompt?: string | null;
+  parentJobId?: string | null;
+  variationIndex?: number | null;
 }
 
-const STEPS = ["Queued", "Processing", "Rendering", "Completed"];
+// Professional, provider-agnostic stage labels (no provider names anywhere).
+const STEPS = ["Understanding", "Generating motion", "Rendering", "Finalizing"];
 
 function stageIndex(e?: VideoEvent | null): number {
   if (!e) return 0;
@@ -244,6 +254,11 @@ export function VideoStudio() {
   const [submitting, setSubmitting] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [live, setLive] = useState<VideoEvent | null>(null);
+  // Result viewer helpers: replay control, intentional-variation counter and a
+  // local favorite toggle.
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [variationCount, setVariationCount] = useState(0);
+  const [favorited, setFavorited] = useState(false);
 
   const [setups, setSetups] = useState<Setup[]>([]);
   const [jobs, setJobs] = useState<VideoJob[]>([]);
@@ -354,8 +369,13 @@ export function VideoStudio() {
     localStorage.setItem(SETUPS_KEY, JSON.stringify(next));
   }
 
-  async function generate() {
-    if (!prompt.trim()) {
+  async function generate(opts?: {
+    parentJobId?: string;
+    variationIndex?: number;
+    promptOverride?: string;
+  }) {
+    const effectivePrompt = (opts?.promptOverride ?? prompt).trim();
+    if (!effectivePrompt) {
       toast.error("A prompt is required");
       return;
     }
@@ -363,9 +383,9 @@ export function VideoStudio() {
     setLive(null);
     try {
       const r = await videoApi.generate({
-        prompt: prompt.trim(),
+        prompt: effectivePrompt,
         negativePrompt: negativePrompt.trim() || undefined,
-        // image.url is always a Cloudinary https:// URL — safe for Runway/Pika
+        // image.url is always a Cloudinary https:// URL — safe for any provider
         inputImageUrl: image?.url,
         durationSeconds: duration,
         resolution,
@@ -383,6 +403,11 @@ export function VideoStudio() {
             : undefined,
         voiceStyle: voice.voiceMode !== "NONE" ? voice.emotion : undefined,
         fps: 24,
+        // Video Agent extensions: continuation chain + intentional variations.
+        ...(opts?.parentJobId ? { parentJobId: opts.parentJobId } : {}),
+        ...(typeof opts?.variationIndex === "number"
+          ? { variationIndex: opts.variationIndex }
+          : {}),
       });
       const job = (r.data as { data: { id: string } }).data;
       setActiveJobId(job.id);
@@ -417,9 +442,20 @@ export function VideoStudio() {
     }
   }
 
+  async function copyText(text: string, ok: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(ok);
+    } catch {
+      toast.error("Couldn't copy");
+    }
+  }
+
   const activeStep = stageIndex(live);
   const failed = live?.status === "FAILED" || live?.status === "CANCELLED";
   const done = live?.status === "COMPLETED";
+  // Full record for the active job (prompt + revised prompt for the viewer).
+  const activeJob = jobs.find((j) => j.id === activeJobId) ?? null;
 
   const connBadge = useMemo(() => {
     if (sse === "open") return <Badge tone="green">Live</Badge>;
@@ -439,7 +475,8 @@ export function VideoStudio() {
                   Generate video
                 </h2>
                 <p className="text-sm text-gray-400">
-                  Text-to-video or image-to-video, Runway / Pika auto-routed.
+                  Text-to-video or image-to-video — the best engine is selected
+                  automatically.
                 </p>
               </div>
               {connBadge}
@@ -482,11 +519,16 @@ export function VideoStudio() {
               ImageUploadSlot replaces <AssetSlot>.
               Files are uploaded to Cloudinary via POST /api/chat/upload.
               image.url is always a res.cloudinary.com https:// URL before
-              it reaches videoApi.generate — Runway / Pika won't reject it.
+              it reaches videoApi.generate — accepted by any render engine.
             */}
             <ImageUploadSlot value={image} onChange={setImage} />
 
-            <QualitySelector value={quality} onChange={setQuality} />
+            <PillSelect
+              label="Quality"
+              value={quality}
+              onChange={setQuality}
+              options={VIDEO_QUALITY_OPTIONS}
+            />
             <PillSelect
               label="Resolution"
               value={resolution}
@@ -530,7 +572,7 @@ export function VideoStudio() {
               loading={submitting}
               disabled={submitting || !prompt.trim()}
               icon={<Wand2 className="h-4 w-4" />}
-              onClick={generate}
+              onClick={() => generate()}
             >
               {submitting
                 ? "Submitting…"
@@ -663,7 +705,7 @@ export function VideoStudio() {
                     variant="secondary"
                     size="sm"
                     icon={<RotateCcw className="h-4 w-4" />}
-                    onClick={generate}
+                    onClick={() => generate()}
                   >
                     Retry
                   </Button>
@@ -672,13 +714,28 @@ export function VideoStudio() {
               {done && live?.outputUrl && (
                 <div className="space-y-3">
                   <video
+                    ref={videoRef}
                     src={live.outputUrl}
                     poster={live.thumbnailUrl ?? undefined}
                     controls
                     playsInline
                     className="aspect-video w-full rounded-xl border border-white/10 bg-black"
                   />
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Play className="h-4 w-4" />}
+                      onClick={() => {
+                        const v = videoRef.current;
+                        if (v) {
+                          v.currentTime = 0;
+                          void v.play();
+                        }
+                      }}
+                    >
+                      Replay
+                    </Button>
                     <a
                       href={live.outputUrl}
                       download
@@ -696,6 +753,87 @@ export function VideoStudio() {
                       onClick={() => share(live!.outputUrl!)}
                     >
                       Share
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Wand2 className="h-4 w-4" />}
+                      onClick={() =>
+                        generate({ parentJobId: activeJobId ?? undefined })
+                      }
+                    >
+                      Continue editing
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Sparkles className="h-4 w-4" />}
+                      onClick={() => {
+                        generate({
+                          variationIndex: variationCount,
+                          promptOverride: activeJob?.prompt ?? prompt,
+                        });
+                        setVariationCount((c) => c + 1);
+                      }}
+                    >
+                      Variations
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Files className="h-4 w-4" />}
+                      onClick={() =>
+                        generate({ promptOverride: activeJob?.prompt ?? prompt })
+                      }
+                    >
+                      Duplicate
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Copy className="h-4 w-4" />}
+                      onClick={() =>
+                        copyText(activeJob?.prompt ?? prompt, "Prompt copied")
+                      }
+                    >
+                      Copy prompt
+                    </Button>
+                    {activeJob?.revisedPrompt && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<Copy className="h-4 w-4" />}
+                        onClick={() =>
+                          copyText(
+                            activeJob.revisedPrompt!,
+                            "Revised prompt copied",
+                          )
+                        }
+                      >
+                        Copy revised
+                      </Button>
+                    )}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={
+                        <Star
+                          className={cn(
+                            "h-4 w-4",
+                            favorited && "fill-yellow-400 text-yellow-400",
+                          )}
+                        />
+                      }
+                      onClick={() => {
+                        setFavorited((f) => !f);
+                        toast.success(
+                          !favorited
+                            ? "Added to favorites"
+                            : "Removed from favorites",
+                        );
+                      }}
+                    >
+                      Favorite
                     </Button>
                   </div>
                 </div>

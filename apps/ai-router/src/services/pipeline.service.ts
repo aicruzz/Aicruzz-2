@@ -165,7 +165,21 @@ export class PipelineService {
       console.log(`[Pipeline:${PIPELINE_MODE}] keyframe ready → ${url}`);
     }
 
-    const outcome = await this.fallback.run(animateChain, workingRequest, options);
+    // Exhaust the WHOLE provider chain (each provider + its retries) so a video
+    // fails only when every supported provider has genuinely failed. With N
+    // providers and 1 retry each, that's N*2 total attempts.
+    const exhaustiveOptions: FallbackOptions = {
+      ...options,
+      maxAttempts: Math.max(
+        options.maxAttempts ?? 0,
+        animateChain.length * 2,
+      ),
+    };
+    const outcome = await this.fallback.run(
+      animateChain,
+      workingRequest,
+      exhaustiveOptions,
+    );
     steps.push({
       step: 'animate',
       provider: outcome.provider,

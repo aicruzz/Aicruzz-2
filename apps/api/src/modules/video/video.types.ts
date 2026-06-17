@@ -2,6 +2,9 @@ export type VideoResolution = 'SD_480P' | 'HD_720P' | 'FHD_1080P';
 export type QualityMode = 'STANDARD' | 'HIGH' | 'ULTRA';
 export type JobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 
+// Re-exported from the DB schema so the video module is self-contained.
+export type { VideoExecutionLedger, VideoAgentMeta } from '../../db/schema';
+
 export interface CreateVideoJobInput {
   prompt: string;
   negativePrompt?: string;
@@ -14,6 +17,11 @@ export interface CreateVideoJobInput {
   voiceText?: string;
   voiceGender?: 'MALE' | 'FEMALE';
   fps?: number;
+  // Video Agent extensions (optional, additive):
+  // Continue editing from a previous job (frame-based continuation), and
+  // intentional A–E variations. The Video Agent handles the rest.
+  parentJobId?: string;
+  variationIndex?: number;
 }
 
 export interface VideoJobDto {
@@ -38,6 +46,11 @@ export interface VideoJobDto {
   completedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  // Video Agent metadata (nullable, additive) — powers Copy revised prompt,
+  // continuation chains and variations. Restored on reload.
+  revisedPrompt?: string | null;
+  parentJobId?: string | null;
+  variationIndex?: number | null;
 }
 
 /**

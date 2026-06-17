@@ -225,6 +225,14 @@ export class ProviderSelector {
     const reorder = reorderByCapability(chain, request);
     chain = reorder.chain;
 
+    // Layer 2 (VIDEO only) — health-aware reorder. Keeps every provider in the
+    // chain (so fallback can still try them all → a video fails only when ALL
+    // providers fail), but puts the healthiest capable provider first so the
+    // first attempt has the highest success probability.
+    if (module === 'VIDEO') {
+      chain = this.healthReorder(chain);
+    }
+
     const baseReason =
       module === 'VIDEO'
         ? `module=VIDEO tier=${request.qualityMode ?? 'STANDARD'} → ${chain.map((p) => p.id).join('→') || 'none'}`
@@ -239,6 +247,24 @@ export class ProviderSelector {
       substituted: reorder.substituted,
       substitutionReason: reorder.substitutionReason,
     };
+  }
+
+  // Stable health sort: higher health first, ties keep the input order. Demotes
+  // DEGRADED/OFFLINE / high-error / slow providers so the healthiest goes first.
+  private healthReorder(chain: BaseProvider[]): BaseProvider[] {
+    const score = (id: ProviderId): number => {
+      const h = this.health.getHealth(id);
+      const statusScore =
+        h.status === 'ONLINE' ? 1 : h.status === 'DEGRADED' ? 0.5 : 0.1;
+      return Math.max(
+        0,
+        statusScore - h.errorRate - Math.min(h.latencyMs / 10_000, 0.3),
+      );
+    };
+    return chain
+      .map((p, i) => ({ p, i, s: score(p.id) }))
+      .sort((a, b) => b.s - a.s || a.i - b.i)
+      .map((x) => x.p);
   }
 
   private resolve(ids: ProviderId[], module: AiModule): BaseProvider[] {

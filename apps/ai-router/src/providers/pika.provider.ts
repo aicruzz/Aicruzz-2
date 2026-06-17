@@ -7,6 +7,7 @@ import {
   PIKA_SQUARE_TOLERANCE,
 } from './capabilities';
 import { clampDuration, PROVIDER_DURATIONS } from '../utils/video-duration';
+import { tailorVideoPrompt } from '../services/video-capabilities';
 
 const TEXT_TO_VIDEO_ENDPOINT = 'fal-ai/pika/v2.2/text-to-video';
 const IMAGE_TO_VIDEO_ENDPOINT = 'fal-ai/pika/v2.2/image-to-video';
@@ -67,7 +68,7 @@ export class PikaProvider extends BaseProvider {
       );
 
       const input: PikaVideoInput = {
-        prompt: request.prompt,
+        prompt: tailorVideoPrompt(request.prompt ?? '', this.id),
         aspect_ratio: this.getAspectRatio(request),
         negative_prompt: request.negativePrompt ?? 'blur, distortion, low quality',
         duration: actualDuration,

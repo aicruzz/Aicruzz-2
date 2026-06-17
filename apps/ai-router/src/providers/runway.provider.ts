@@ -4,6 +4,7 @@ import type { ProviderConfig, ProviderResult, RouteRequest } from '../types';
 import { mapToSupportedSize } from '../utils/video-resolution';
 import { RUNWAY_MODEL_CAPABILITIES } from './capabilities';
 import { clampDuration, PROVIDER_DURATIONS } from '../utils/video-duration';
+import { tailorVideoPrompt } from '../services/video-capabilities';
 
 // Runway's developer/Gen API is served from api.dev.runwayml.com — NOT
 // api.runwayml.com (that host returns 401 for API keys).
@@ -79,7 +80,7 @@ export class RunwayProvider extends BaseProvider {
 
       const payload: Record<string, unknown> = {
         promptImage: request.inputImageUrl, // string URL — required
-        promptText: request.prompt ?? '',
+        promptText: tailorVideoPrompt(request.prompt ?? '', this.id),
         model: this.model,
         duration: actualDuration,
         ratio: resolution.ratioToken,
