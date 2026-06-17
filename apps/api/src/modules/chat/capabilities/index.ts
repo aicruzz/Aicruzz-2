@@ -9,6 +9,7 @@ export * from "./engine";
 export * from "./telemetry";
 export * from "./attachment";
 export * from "./design-export";
+export * from "./config";
 
 import { registerCapability } from "./registry";
 import type { Capability } from "./types";

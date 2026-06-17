@@ -2,7 +2,11 @@ import { Response } from "express";
 import axios from "axios";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../config/database";
-import { chats, chatMessages } from "../../db/schema";
+import {
+  chats,
+  chatMessages,
+  type ChatMessageMetadata,
+} from "../../db/schema";
 import { aiRouter } from "../../services/ai-router.client";
 import {
   uploadBufferToCloudinary,
@@ -131,6 +135,7 @@ export async function getChatById(
           model: true,
           tokensUsed: true,
           latencyMs: true,
+          metadata: true,
           createdAt: true,
         },
       },
@@ -139,14 +144,31 @@ export async function getChatById(
 
   if (!chat) throw new AppError("Chat not found", 404);
 
-  // Presign image/video URLs so the browser <img>/<video> can fetch from a
-  // private bucket. Stored URLs remain canonical; presigned URLs are short-lived.
+  // Resolve stored URLs and restore the full multimodal state from metadata so a
+  // reloaded conversation looks exactly as it did. Legacy rows (null metadata)
+  // simply keep their single imageUrl — fully backward compatible.
   const messages = await Promise.all(
-    chat.messages.map(async (m) => ({
-      ...m,
-      imageUrl: await resolveStoredUrl(m.imageUrl),
-      videoUrl: await resolveStoredUrl(m.videoUrl),
-    })),
+    chat.messages.map(async (m) => {
+      const meta = (m.metadata ?? {}) as ChatMessageMetadata;
+      const imageUrls = meta.imageUrls?.length
+        ? ((await Promise.all(meta.imageUrls.map(resolveStoredUrl))).filter(
+            Boolean,
+          ) as string[])
+        : null;
+      return {
+        ...m,
+        imageUrl: await resolveStoredUrl(m.imageUrl),
+        videoUrl: await resolveStoredUrl(m.videoUrl),
+        imageUrls,
+        originalImageUrl: meta.originalImageUrl
+          ? await resolveStoredUrl(meta.originalImageUrl)
+          : null,
+        prompt: meta.prompt ?? null,
+        revisedPrompt: meta.revisedPrompt ?? null,
+        operation: meta.operation ?? null,
+        designMeta: meta.designMeta ?? null,
+      };
+    }),
   );
 
   return { ...chat, messages } as unknown as ChatDetail;
@@ -599,6 +621,8 @@ async function handleTextTurn(ctx: CapabilityContext): Promise<void> {
     content,
     imageUrl: primaryImage,
     videoUrl,
+    // Persist every uploaded image (in order) so a reload restores them all.
+    metadata: images.length > 1 ? { imageUrls: images } : null,
   });
 
   // 6. Build message array for AI — the current turn includes every uploaded
@@ -830,6 +854,15 @@ async function handleImageGeneration(
         model: "gpt-image-1",
         tokensUsed: 0,
         latencyMs: result.result.latencyMs ?? 0,
+        // Version-history + gallery metadata (restored on reload).
+        metadata: {
+          prompt,
+          revisedPrompt: builtPrompt,
+          operation: op,
+          category: plan.category,
+          version: 1,
+          designMeta: buildDesignMeta(plan.category),
+        },
       })
       .returning({ id: chatMessages.id });
 
@@ -946,12 +979,15 @@ async function handleImageTransform(
     metadata: { chatId, mode: "image_transform", quality: editQuality },
   });
 
-  // Persist the user's turn with the ORIGINAL image (the "before").
+  // Persist the user's turn with the ORIGINAL image (the "before") and every
+  // uploaded reference so a reload restores them all.
   await db.insert(chatMessages).values({
     chatId,
     role: "USER",
     content: prompt,
     imageUrl: originalImageUrl,
+    metadata:
+      originalImageUrls.length > 1 ? { imageUrls: originalImageUrls } : null,
   });
 
   // No text chunk — the client renders an image skeleton (via the "mode" event)
@@ -1005,6 +1041,15 @@ async function handleImageTransform(
         model: "gpt-image-1",
         tokensUsed: 0,
         latencyMs: result.result.latencyMs ?? 0,
+        // Edit-chain metadata: keep the "before" so the before/after view and
+        // the parent relationship restore on reload.
+        metadata: {
+          originalImageUrl,
+          parentImageUrl: originalImageUrl,
+          operation: editOp,
+          prompt,
+          version: 2,
+        },
       })
       .returning({ id: chatMessages.id });
 

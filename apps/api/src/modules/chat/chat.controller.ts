@@ -5,9 +5,17 @@ import {
   isCloudinaryConfigured,
 } from '../../config/cloudinary';
 import { sendSuccess, sendCreated, sendError } from '../../utils/response';
+import { UPLOAD_LIMITS } from './capabilities/config';
 
 const IMAGE_MAX = 20 * 1024 * 1024;  // 20 MB
 const VIDEO_MAX = 100 * 1024 * 1024; // 100 MB
+
+// GET /api/chat/config — the single shared upload configuration the frontend
+// reads so the file picker, drag & drop, paste, composer and validation all use
+// exactly the same limits as the backend.
+export async function getConfig(_req: Request, res: Response): Promise<void> {
+  sendSuccess(res, UPLOAD_LIMITS, 'Chat config');
+}
 
 // GET /api/chat
 export async function listChats(req: Request, res: Response): Promise<void> {

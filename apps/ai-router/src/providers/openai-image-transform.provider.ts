@@ -24,6 +24,9 @@ type EditQuality = 'high' | 'medium' | 'low' | 'auto';
  * with the OpenAI chat/generation provider in the router's provider map.
  */
 export class OpenAIImageTransformProvider extends BaseProvider {
+  // Max reference images gpt-image-1's edit endpoint accepts in one call.
+  static readonly MAX_REFERENCE_IMAGES = 16;
+
   readonly id = 'OPENAI_IMAGE' as const;
   readonly config: ProviderConfig = {
     id: 'OPENAI_IMAGE',
@@ -49,14 +52,25 @@ export class OpenAIImageTransformProvider extends BaseProvider {
     try {
       // Accept one or many input images. Multiple images are passed to
       // gpt-image-1's edit endpoint as references for combine/blend edits.
-      const inputUrls =
+      const allUrls =
         request.inputImageUrls?.length
           ? request.inputImageUrls
           : request.inputImageUrl
             ? [request.inputImageUrl]
             : [];
-      if (!inputUrls.length) {
+      if (!allUrls.length) {
         throw new Error('IMAGE_TRANSFORM requires an input image to edit');
+      }
+      // Respect the provider's reference-image capacity. If a turn exceeds it we
+      // CAP (and log why) rather than silently dropping to just the first image,
+      // so the user is never quietly missing references.
+      const inputUrls = allUrls.slice(0, OpenAIImageTransformProvider.MAX_REFERENCE_IMAGES);
+      if (allUrls.length > inputUrls.length) {
+        console.warn(
+          `[OPENAI_IMAGE] ${allUrls.length} reference images exceed the ` +
+            `provider cap of ${OpenAIImageTransformProvider.MAX_REFERENCE_IMAGES}; ` +
+            `using the first ${inputUrls.length}.`,
+        );
       }
 
       const isPro = request.qualityMode === 'ULTRA';

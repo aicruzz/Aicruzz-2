@@ -164,6 +164,9 @@ Open `http://localhost:3000`.
 
 ```bash
 # When database url changed, run this:
+
+cd apps/api
+
 npx drizzle-kit push
 
 # or:

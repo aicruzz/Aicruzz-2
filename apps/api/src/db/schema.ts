@@ -476,6 +476,35 @@ export const chatsRelations = relations(chats, ({ one, many }) => ({
 // CHAT MESSAGES
 // ─────────────────────────────────────────────────────────────
 
+// Rich, backward-compatible message metadata (jsonb). Nullable: old rows and
+// single-image messages keep working unchanged (metadata stays null and the
+// single `image_url` column is used). New rows persist the full multimodal
+// state so a conversation restores exactly after reload.
+export interface ChatMessageMetadata {
+  /** All uploaded/attached images, in order. */
+  imageUrls?: string[];
+  /** Optional per-image captions (aligned to imageUrls). */
+  captions?: string[];
+  /** Source ("before") image for an edit result — drives the before/after view. */
+  originalImageUrl?: string | null;
+  /** Image this one was derived from (edit/continuation chain). */
+  parentImageUrl?: string | null;
+  /** Original user prompt for a generated image. */
+  prompt?: string | null;
+  /** Engineered prompt actually sent to the model. */
+  revisedPrompt?: string | null;
+  /** Operation (generate/faceswap/background/objectremove/…). */
+  operation?: string | null;
+  /** Image category (UI/LOGO/PRODUCT/…). */
+  category?: string | null;
+  /** Version index within an edit/continuation chain. */
+  version?: number;
+  /** Variation index (A/B/C/D) when produced via Variations. */
+  variationIndex?: number | null;
+  /** Design-to-code metadata (UI etc.); free-form, future export pipeline. */
+  designMeta?: unknown;
+}
+
 export const chatMessages = pgTable(
   'chat_messages',
   {
@@ -489,6 +518,7 @@ export const chatMessages = pgTable(
     model: text('model'),
     tokensUsed: integer('tokens_used'),
     latencyMs: integer('latency_ms'),
+    metadata: jsonb('metadata').$type<ChatMessageMetadata>(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
   (t) => [

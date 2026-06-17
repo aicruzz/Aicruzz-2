@@ -49,10 +49,20 @@ export interface ChatMessageDto {
   tokensUsed: number | null;
   latencyMs: number | null;
   createdAt: Date;
+  // Restored multimodal state (from chat_messages.metadata). Optional so legacy
+  // single-image rows (null metadata) keep their existing shape.
+  imageUrls?: string[] | null;
+  originalImageUrl?: string | null;
+  prompt?: string | null;
+  revisedPrompt?: string | null;
+  operation?: string | null;
+  designMeta?: unknown;
 }
 
-// Maximum number of images a single chat message may attach.
-export const CHAT_MAX_IMAGES = 4;
+// Maximum number of images a single chat message may attach — sourced from the
+// single shared upload config (capabilities/config) so every layer agrees.
+import { UPLOAD_LIMITS } from "./capabilities/config";
+export const CHAT_MAX_IMAGES = UPLOAD_LIMITS.maxImages;
 
 // Cost per message in credits
 export const CHAT_CREDITS_PER_MESSAGE = 2;

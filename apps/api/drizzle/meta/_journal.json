@@ -29,6 +29,13 @@
       "when": 1780433091071,
       "tag": "0003_add_job_diagnostics",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781697034898,
+      "tag": "0004_add_chat_message_metadata",
+      "breakpoints": true
     }
   ]
 }

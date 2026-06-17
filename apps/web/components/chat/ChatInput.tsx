@@ -14,6 +14,27 @@ interface AttachedFile {
   progress: number;
 }
 
+// Mirrors the backend's shared upload config (GET /api/chat/config). The
+// frontend reads these dynamically — no hardcoded limits live here.
+export interface UploadLimits {
+  maxImages: number;
+  maxVideos: number;
+  maxDocuments?: number;
+  maxFileSizeBytes: number;
+  supportedImageFormats: string[];
+  supportedVideoFormats: string[];
+}
+
+// Fallback used only until the live config is fetched (and if the request fails).
+export const DEFAULT_UPLOAD_LIMITS: UploadLimits = {
+  maxImages: 6,
+  maxVideos: 1,
+  maxDocuments: 0,
+  maxFileSizeBytes: 100 * 1024 * 1024,
+  supportedImageFormats: ["image/jpeg", "image/png", "image/webp", "image/gif"],
+  supportedVideoFormats: ["video/mp4", "video/webm", "video/quicktime"],
+};
+
 interface ChatInputProps {
   onSend: (
     content: string,
@@ -31,6 +52,8 @@ interface ChatInputProps {
   /** When true, the send button becomes a Stop button wired to onStop. */
   isStreaming?: boolean;
   onStop?: () => void;
+  /** Upload limits from the shared config; falls back to DEFAULT_UPLOAD_LIMITS. */
+  uploadLimits?: UploadLimits;
 }
 
 // Upload helper (unchanged)
@@ -88,15 +111,23 @@ export function ChatInput({
   attachInject,
   isStreaming = false,
   onStop,
+  uploadLimits,
 }: ChatInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const [editQuality, setEditQuality] = useState<"FAST" | "PRO">("FAST");
+  const [dragOver, setDragOver] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isVideo = attachments[0]?.file.type.startsWith("video/");
+  // All limits flow from the shared config — no hardcoded numbers below.
+  const limits = uploadLimits ?? DEFAULT_UPLOAD_LIMITS;
+  const maxTotal = limits.maxImages + limits.maxVideos;
+  const acceptStr = [
+    ...limits.supportedImageFormats,
+    ...limits.supportedVideoFormats,
+  ].join(",");
 
   const canSend =
     (text.trim().length > 0 || attachments.some((a) => a.uploadedUrl)) &&
@@ -118,7 +149,7 @@ export function ChatInput({
     if (lastAttachKeyRef.current === attachInject.key) return;
     lastAttachKeyRef.current = attachInject.key;
     setAttachments((prev) => {
-      if (prev.length >= 4) return prev;
+      if (prev.length >= maxTotal) return prev;
       if (prev.some((a) => a.uploadedUrl === attachInject.url)) return prev;
       return [
         ...prev,
@@ -196,41 +227,70 @@ export function ChatInput({
     }
   }
 
-  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
+  // Single entry point for the file picker, drag & drop and paste — so every
+  // input path enforces exactly the same shared limits. Accepts up to the limit
+  // and reports (never silently drops) anything beyond it or of the wrong type.
+  function addFiles(incoming: File[]) {
+    if (!incoming.length) return;
 
-    if (!files.length) return;
+    let imgCount = attachments.filter(
+      (a) => !a.file.type.startsWith("video/"),
+    ).length;
+    let vidCount = attachments.filter((a) =>
+      a.file.type.startsWith("video/"),
+    ).length;
 
-    if (attachments.length + files.length > 4) {
-      toast.error("Maximum 4 files allowed");
-      return;
+    const accepted: File[] = [];
+    for (const file of incoming) {
+      const isVid = file.type.startsWith("video/");
+      const allowed = isVid
+        ? limits.supportedVideoFormats
+        : limits.supportedImageFormats;
+      if (!allowed.includes(file.type)) {
+        toast.error(`Unsupported file type: ${file.name || file.type}`);
+        continue;
+      }
+      if (file.size > limits.maxFileSizeBytes) {
+        const mb = Math.round(limits.maxFileSizeBytes / (1024 * 1024));
+        toast.error(`${file.name || "File"} exceeds the ${mb} MB limit`);
+        continue;
+      }
+      if (isVid) {
+        if (vidCount >= limits.maxVideos) {
+          toast.error(`You can attach up to ${limits.maxVideos} video`);
+          continue;
+        }
+        vidCount += 1;
+      } else {
+        if (imgCount >= limits.maxImages) {
+          toast.error(`You can attach up to ${limits.maxImages} images`);
+          continue;
+        }
+        imgCount += 1;
+      }
+      accepted.push(file);
     }
+    if (!accepted.length) return;
 
-    const newFiles: AttachedFile[] = files.map((file) => ({
+    const baseIndex = attachments.length;
+    const newFiles: AttachedFile[] = accepted.map((file) => ({
       file,
       previewUrl: URL.createObjectURL(file),
       uploading: true,
       progress: 0,
     }));
-
     setAttachments((prev) => [...prev, ...newFiles]);
 
-    newFiles.forEach(async (fileObj, indexOffset) => {
-      const index = attachments.length + indexOffset;
-
+    accepted.forEach(async (file, indexOffset) => {
+      const index = baseIndex + indexOffset;
       try {
-        const { fileUrl } = await uploadChatFile(
-          fileObj.file,
-          (pct) =>
-            setAttachments((prev) => {
-              const copy = [...prev];
-              if (copy[index]) {
-                copy[index].progress = pct;
-              }
-              return copy;
-            }),
+        const { fileUrl } = await uploadChatFile(file, (pct) =>
+          setAttachments((prev) => {
+            const copy = [...prev];
+            if (copy[index]) copy[index].progress = pct;
+            return copy;
+          }),
         );
-
         setAttachments((prev) => {
           const copy = [...prev];
           if (copy[index]) {
@@ -240,17 +300,57 @@ export function ChatInput({
           }
           return copy;
         });
-      } catch (err) {
+      } catch {
         toast.error("Upload failed");
         setAttachments((prev) => prev.filter((_, i) => i !== index));
       }
     });
+  }
 
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    addFiles(Array.from(e.target.files ?? []));
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData?.files ?? []).filter(
+      (f) => f.type.startsWith("image/") || f.type.startsWith("video/"),
+    );
+    if (files.length) {
+      e.preventDefault();
+      addFiles(files);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length) addFiles(files);
+  }
+
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    if (e.dataTransfer?.types?.includes("Files")) {
+      e.preventDefault();
+      if (!dragOver) setDragOver(true);
+    }
+  }
+
+  function handleDragLeave(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setDragOver(false);
+  }
+
   return (
-    <div className="border-t border-white/5 bg-surface-900/80 backdrop-blur-sm px-4 py-4">
+    <div
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      className={clsx(
+        "border-t border-white/5 bg-surface-900/80 backdrop-blur-sm px-4 py-4 transition-shadow",
+        dragOver && "ring-2 ring-inset ring-brand-500/60",
+      )}
+    >
       {/* Attachments */}
       {attachments.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
@@ -271,10 +371,11 @@ export function ChatInput({
       <div className="flex items-end gap-3">
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={disabled || attachments.length >= 4}
+          disabled={disabled || attachments.length >= maxTotal}
+          title={`Attach up to ${limits.maxImages} images`}
           className={clsx(
             "flex h-10 w-10 items-center justify-center rounded-xl border transition-all",
-            attachments.length >= 4
+            attachments.length >= maxTotal
               ? "cursor-not-allowed opacity-40"
               : "border-white/10 bg-surface-700/60 text-gray-400 hover:text-brand-400",
           )}
@@ -286,7 +387,7 @@ export function ChatInput({
           ref={fileInputRef}
           type="file"
           multiple
-          accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm"
+          accept={acceptStr}
           className="hidden"
           onChange={handleFileSelect}
         />
@@ -299,6 +400,7 @@ export function ChatInput({
             value={text}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             disabled={disabled}
             placeholder={placeholder ?? "Message AiCruzz AI…"}
             rows={1}

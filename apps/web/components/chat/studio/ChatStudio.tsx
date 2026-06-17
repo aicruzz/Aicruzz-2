@@ -28,6 +28,8 @@ import { MessageBubble } from "@/components/chat/MessageBubble";
 import {
   ChatInput,
   CHAT_COMPOSER_TEXTAREA_ID,
+  DEFAULT_UPLOAD_LIMITS,
+  type UploadLimits,
 } from "@/components/chat/ChatInput";
 import { ChatShortcutsHelp } from "@/components/chat/ChatShortcutsHelp";
 
@@ -134,6 +136,9 @@ export function ChatStudio() {
     key: number;
     url: string;
   } | null>(null);
+  // Upload limits from the shared backend config (single source of truth).
+  const [uploadLimits, setUploadLimits] =
+    useState<UploadLimits>(DEFAULT_UPLOAD_LIMITS);
   const threadRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -208,6 +213,20 @@ export function ChatStudio() {
   useEffect(() => {
     loadChats();
   }, [loadChats]);
+
+  // Fetch the shared upload limits once; fall back to defaults on any failure so
+  // the composer always works. The frontend never hardcodes these numbers.
+  useEffect(() => {
+    chatApi
+      .getConfig()
+      .then((r) => {
+        const cfg = (r.data as { data?: Partial<UploadLimits> }).data;
+        if (cfg?.maxImages) setUploadLimits({ ...DEFAULT_UPLOAD_LIMITS, ...cfg });
+      })
+      .catch(() => {
+        /* keep defaults */
+      });
+  }, []);
 
   // "Use This Prompt" hand-off from the dashboard showcase. Chat only
   // supports a prompt — settings metadata is gracefully ignored.
@@ -867,6 +886,7 @@ export function ChatStudio() {
             composerInject={inject}
             onComposerInjectConsumed={() => setInject(null)}
             attachInject={attachInject}
+            uploadLimits={uploadLimits}
           />
         </div>
       </div>

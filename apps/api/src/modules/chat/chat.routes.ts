@@ -9,21 +9,22 @@ import {
   listChatsValidator,
   enhancePromptValidator,
 } from './chat.validators';
+import {
+  UPLOAD_LIMITS,
+  ALL_SUPPORTED_UPLOAD_FORMATS,
+} from './capabilities/config';
 import * as chatController from './chat.controller';
 
 const router = Router();
 
-// Chat attachments are streamed straight to Cloudinary, so we hold the file
-// in memory (not disk) — videos can be up to 100 MB (enforced per-type below).
+// Chat attachments are streamed straight to Cloudinary, so we hold the file in
+// memory (not disk). Size + allowed formats come from the single shared upload
+// config so multer can never disagree with the frontend or validators.
 const chatUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: { fileSize: UPLOAD_LIMITS.maxFileSizeBytes },
   fileFilter: (_req, file, cb) => {
-    const allowed = [
-      'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-      'video/mp4', 'video/webm', 'video/quicktime',
-    ];
-    allowed.includes(file.mimetype)
+    ALL_SUPPORTED_UPLOAD_FORMATS.includes(file.mimetype)
       ? cb(null, true)
       : cb(new Error('File type not allowed'));
   },
@@ -38,6 +39,10 @@ router.get('/', listChatsValidator, validate, chatController.listChats);
 
 // POST   /api/chat
 router.post('/', chatController.createChat);
+
+// GET    /api/chat/config — shared upload limits (single source of truth).
+// Declared before /:chatId so it isn't captured as a chat id.
+router.get('/config', chatController.getConfig);
 
 // GET    /api/chat/:chatId
 router.get('/:chatId', chatController.getChat);

@@ -256,6 +256,7 @@ export const apiPlatformApi = {
 // Chat endpoints
 export const chatApi = {
   listChats: (page = 1, limit = 20) => api.get(`/chat?page=${page}&limit=${limit}`),
+  getConfig: () => api.get('/chat/config'),
   getChat: (chatId: string) => api.get(`/chat/${chatId}`),
   createChat: (model?: string) => api.post('/chat', { model }),
   deleteChat: (chatId: string) => api.delete(`/chat/${chatId}`),

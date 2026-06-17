@@ -1,4 +1,5 @@
 import { body, param, query } from 'express-validator';
+import { UPLOAD_LIMITS } from './capabilities/config';
 
 export const sendMessageValidator = [
   body('content')
@@ -17,8 +18,10 @@ export const sendMessageValidator = [
 
   body('imageUrls')
     .optional()
-    .isArray({ max: 4 })
-    .withMessage('imageUrls must be an array of at most 4 items'),
+    .isArray({ max: UPLOAD_LIMITS.maxImages })
+    .withMessage(
+      `imageUrls must be an array of at most ${UPLOAD_LIMITS.maxImages} items`,
+    ),
 
   body('imageUrls.*')
     .isString()
