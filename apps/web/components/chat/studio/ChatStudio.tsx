@@ -9,6 +9,7 @@ import {
   Sparkles,
   RotateCcw,
   Wand2,
+  ArrowDown,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { chatApi, videoApi, getApiError } from "@/lib/api";
@@ -24,7 +25,11 @@ import {
 } from "@/components/ui";
 import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { MessageBubble } from "@/components/chat/MessageBubble";
-import { ChatInput } from "@/components/chat/ChatInput";
+import {
+  ChatInput,
+  CHAT_COMPOSER_TEXTAREA_ID,
+} from "@/components/chat/ChatInput";
+import { ChatShortcutsHelp } from "@/components/chat/ChatShortcutsHelp";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -40,11 +45,41 @@ interface Message {
   role: "USER" | "ASSISTANT" | "SYSTEM";
   content: string;
   imageUrl?: string | null;
+  imageUrls?: string[] | null;
   originalImageUrl?: string | null;
   videoUrl?: string | null;
   provider?: string | null;
   streaming?: boolean;
+  /** True while an image-generation/edit turn is rendering (shows a skeleton). */
+  generatingImage?: boolean;
+  /** Operation hint (ui/faceswap/background/…) for operation-aware loader phases. */
+  imageOp?: string;
+  /** True when the turn failed — shows inline error + Retry. */
+  error?: boolean;
+  /** Original prompt of a generated image (Copy prompt / Regenerate). */
+  prompt?: string | null;
+  /** Engineered prompt actually sent to the model (Copy revised prompt). */
+  revisedPrompt?: string | null;
   createdAt: Date;
+}
+
+// Client-side mirror of the backend image router — lets us show the image
+// loader instantly (no flash of the text typing indicator) before the server
+// confirms via the "mode" event. Conservative: only predicts obvious cases.
+const PRED_OVERRIDE_RE =
+  /\b(image not text|not text|image only|as an? image|generate an? image|make an? image|create an? image)\b/i;
+const PRED_GEN_RE =
+  /\b(create|generate|draw|render|make|design|paint|sketch|illustrate|visuali[sz]e|imagine)\b[\s\S]{0,60}\b(image|picture|photo|illustration|drawing|art(?:work)?|logo|poster|wallpaper|portrait|mock-?up|ui|interface|landing\s?page|banner|flyer|icon|avatar|sticker|wireframe|character|design|emoji)\b/i;
+const PRED_EDIT_RE =
+  /\b(remove|erase|replace|swap|background|sky|face\s?-?swap|head\s?-?swap|cartoon|anime|ghibli|pixar|outpaint|combine|merge|recreate|redesign|variation|recolou?r|restyle|like the (?:uploaded|attached|sample|reference))\b/i;
+
+function predictImageTurn(content: string, hasImages: boolean): boolean {
+  const t = content.trim();
+  if (!t) return false;
+  if (PRED_OVERRIDE_RE.test(t)) return true;
+  if (hasImages) return PRED_EDIT_RE.test(t);
+  if (/^create an image of\b/i.test(t)) return true;
+  return PRED_GEN_RE.test(t);
 }
 
 // Reasoning label derived from the provider the router actually picked
@@ -93,8 +128,64 @@ export function ChatStudio() {
   );
   const [videoOpen, setVideoOpen] = useState(false);
   const [videoPrompt, setVideoPrompt] = useState("");
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [attachInject, setAttachInject] = useState<{
+    key: number;
+    url: string;
+  } | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
-  const lastUserRef = useRef<string>("");
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Always-current snapshot of messages so action callbacks can stay
+  // referentially stable (no `messages` dep → MessageBubble memo holds during
+  // streaming).
+  const messagesRef = useRef<Message[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Streaming infra: AbortController for cancellation + rAF-batched flush of the
+  // assistant text buffer (one state update per frame instead of per token).
+  const abortRef = useRef<AbortController | null>(null);
+  const abortedRef = useRef(false);
+  const streamBufRef = useRef("");
+  const rafRef = useRef<number | null>(null);
+  const streamTargetRef = useRef<string | null>(null);
+  const atBottomRef = useRef(true);
+
+  const flushBuffer = useCallback(() => {
+    rafRef.current = null;
+    const id = streamTargetRef.current;
+    const delta = streamBufRef.current;
+    streamBufRef.current = "";
+    if (!id || !delta) return;
+    setMessages((p) =>
+      p.map((m) => (m.id === id ? { ...m, content: m.content + delta } : m)),
+    );
+  }, []);
+
+  const scheduleFlush = useCallback(() => {
+    if (rafRef.current != null) return;
+    rafRef.current = requestAnimationFrame(flushBuffer);
+  }, [flushBuffer]);
+
+  const flushNow = useCallback(() => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    flushBuffer();
+  }, [flushBuffer]);
+
+  // Abort any in-flight stream + cancel pending frame on unmount.
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    },
+    [],
+  );
 
   const loadChats = useCallback(async () => {
     try {
@@ -128,12 +219,31 @@ export function ChatStudio() {
     }
   }, []);
 
+  // Pin to bottom only when the user is already near the bottom — reading
+  // scrollback is never yanked away by streaming output.
   useEffect(() => {
+    if (atBottomRef.current) {
+      threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
+    }
+  }, [messages]);
+
+  const onThreadScroll = useCallback(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const atBottom = distance < 80;
+    atBottomRef.current = atBottom;
+    setShowScrollBtn(!atBottom && el.scrollHeight > el.clientHeight + 40);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    atBottomRef.current = true;
+    setShowScrollBtn(false);
     threadRef.current?.scrollTo({
       top: threadRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages]);
+  }, []);
 
   async function selectChat(id: string) {
     setActiveChatId(id);
@@ -166,25 +276,39 @@ export function ChatStudio() {
     }
   }
 
-  // ── Streaming send (replicates the existing SSE contract) ────
+  // ── Streaming send (SSE) with cancellation + rAF-batched rendering ────
   const send = useCallback(
     async (
       content: string,
       imageUrl?: string,
       videoUrl?: string,
       editQuality?: "FAST" | "PRO",
+      imageUrls?: string[],
     ) => {
       if (!content.trim() && !imageUrl && !videoUrl) return;
-      lastUserRef.current = content;
+      if (abortRef.current) return; // guard against concurrent streams
+      atBottomRef.current = true; // a new turn always snaps to the bottom
+
       const userMsg: Message = {
         id: `u-${Date.now()}`,
         role: "USER",
         content,
         imageUrl,
+        imageUrls: imageUrls?.length ? imageUrls : undefined,
         videoUrl,
         createdAt: new Date(),
       };
+      // Predict an image turn so the premium loader shows instantly (no flash
+      // of the text typing indicator). The server "mode" event confirms it and
+      // the first text chunk corrects a wrong prediction.
+      const predictedImage = predictImageTurn(
+        content,
+        !!(imageUrls?.length || imageUrl),
+      );
       const streamId = `a-${Date.now()}`;
+      streamTargetRef.current = streamId;
+      streamBufRef.current = "";
+      abortedRef.current = false;
       setMessages((p) => [
         ...p,
         userMsg,
@@ -193,10 +317,17 @@ export function ChatStudio() {
           role: "ASSISTANT",
           content: "",
           streaming: true,
+          generatingImage: predictedImage,
           createdAt: new Date(),
         },
       ]);
       setStreaming(true);
+      // One-shot guard: the first text chunk means this is a text turn, so the
+      // (possibly predicted) image loader must be cleared.
+      let clearedImageFlag = false;
+
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       let chatId = activeChatId;
       try {
@@ -204,9 +335,11 @@ export function ChatStudio() {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             ...(chatId ? { chatId } : {}),
             ...(imageUrl ? { imageUrl } : {}),
+            ...(imageUrls?.length ? { imageUrls } : {}),
             ...(videoUrl ? { videoUrl } : {}),
             ...(imageUrl && editQuality ? { editQuality } : {}),
             content,
@@ -241,21 +374,48 @@ export function ChatStudio() {
               chatId = parsed.chatId as string;
               if (!activeChatId) setActiveChatId(chatId);
             }
-            if (evt === "chunk" && parsed.text) {
+            if (evt === "mode" && parsed.kind === "image") {
+              // Image turn — swap the text typing indicator for the premium
+              // loader and record the operation so it shows matching phases.
+              const op =
+                typeof parsed.op === "string" ? (parsed.op as string) : undefined;
               setMessages((p) =>
                 p.map((m) =>
                   m.id === streamId
-                    ? { ...m, content: m.content + (parsed.text as string) }
+                    ? { ...m, generatingImage: true, imageOp: op }
                     : m,
                 ),
               );
             }
+            if (evt === "chunk" && parsed.text) {
+              // First token ⇒ a text turn: clear any predicted image loader.
+              if (!clearedImageFlag) {
+                clearedImageFlag = true;
+                setMessages((p) =>
+                  p.map((m) =>
+                    m.id === streamId && m.generatingImage
+                      ? { ...m, generatingImage: false }
+                      : m,
+                  ),
+                );
+              }
+              // Buffer tokens and flush once per animation frame.
+              streamBufRef.current += parsed.text as string;
+              scheduleFlush();
+            }
+            if (evt === "error") {
+              throw new Error((parsed.message as string) ?? "AI error");
+            }
             if (evt === "done") {
+              flushNow();
               const meta = parsed as {
                 provider?: string;
                 imageUrl?: string | null;
                 originalImageUrl?: string | null;
                 videoUrl?: string | null;
+                assistantImage?: boolean;
+                imagePrompt?: string | null;
+                revisedPrompt?: string | null;
               };
               setMessages((p) =>
                 p.map((m) =>
@@ -263,8 +423,21 @@ export function ChatStudio() {
                     ? {
                         ...m,
                         streaming: false,
+                        generatingImage: false,
                         provider: meta.provider ?? null,
-                        imageUrl: meta.imageUrl ?? m.imageUrl,
+                        // Only attach imageUrl to the assistant bubble for a
+                        // true generation/edit. A vision turn echoes the user's
+                        // upload here and must NOT show as a generated result
+                        // (it already renders on the user message).
+                        imageUrl: meta.assistantImage
+                          ? (meta.imageUrl ?? m.imageUrl)
+                          : m.imageUrl,
+                        prompt: meta.assistantImage
+                          ? (meta.imagePrompt ?? m.prompt)
+                          : m.prompt,
+                        revisedPrompt: meta.assistantImage
+                          ? (meta.revisedPrompt ?? m.revisedPrompt)
+                          : m.revisedPrompt,
                         originalImageUrl:
                           meta.originalImageUrl ?? m.originalImageUrl,
                         videoUrl: meta.videoUrl ?? m.videoUrl,
@@ -276,25 +449,140 @@ export function ChatStudio() {
           }
         }
       } catch (e) {
-        setMessages((p) =>
-          p.map((m) =>
-            m.id === streamId
-              ? {
-                  ...m,
-                  streaming: false,
-                  content: m.content || "⚠️ Generation failed.",
-                }
-              : m,
-          ),
-        );
-        toast.error(getApiError(e));
+        flushNow();
+        const aborted =
+          controller.signal.aborted ||
+          abortedRef.current ||
+          (e instanceof DOMException && e.name === "AbortError");
+        if (aborted) {
+          // User stopped generation — keep the partial output, drop the cursor.
+          setMessages((p) =>
+            p.map((m) =>
+              m.id === streamId
+                ? { ...m, streaming: false, generatingImage: false }
+                : m,
+            ),
+          );
+        } else {
+          setMessages((p) =>
+            p.map((m) =>
+              m.id === streamId
+                ? { ...m, streaming: false, generatingImage: false, error: true }
+                : m,
+            ),
+          );
+          toast.error(getApiError(e));
+        }
       } finally {
+        flushNow();
+        abortRef.current = null;
+        streamTargetRef.current = null;
         setStreaming(false);
         loadChats();
       }
     },
-    [activeChatId, loadChats],
+    [activeChatId, loadChats, scheduleFlush, flushNow],
   );
+
+  // ── Cancel / regenerate / edit / retry ───────────────────────
+  const stop = useCallback(() => {
+    abortedRef.current = true;
+    abortRef.current?.abort();
+  }, []);
+
+  // Resend the most recent user turn (drops everything from it onward first).
+  const regenerateLast = useCallback(() => {
+    const msgs = messagesRef.current;
+    let cut = -1;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === "USER") {
+        cut = i;
+        break;
+      }
+    }
+    if (cut < 0) return;
+    const u = msgs[cut];
+    setMessages((p) => p.slice(0, cut));
+    void send(
+      u.content,
+      u.imageUrl ?? undefined,
+      u.videoUrl ?? undefined,
+      undefined,
+      u.imageUrls ?? undefined,
+    );
+  }, [send]);
+
+  // Edit a user message: truncate the thread from it and resend the new text.
+  const submitEdit = useCallback(
+    (id: string, newContent: string) => {
+      const msgs = messagesRef.current;
+      const idx = msgs.findIndex((m) => m.id === id);
+      if (idx < 0) return;
+      const orig = msgs[idx];
+      setMessages((p) => p.slice(0, idx));
+      void send(
+        newContent,
+        orig.imageUrl ?? undefined,
+        orig.videoUrl ?? undefined,
+        undefined,
+        orig.imageUrls ?? undefined,
+      );
+    },
+    [send],
+  );
+
+  // Generated-image actions (stable identities so MessageBubble memo holds).
+  const regenerateImage = useCallback(
+    (prompt: string) => {
+      if (prompt.trim()) void send(prompt.trim());
+    },
+    [send],
+  );
+
+  // Intentional variations — each click explores a distinct design direction
+  // (A→B→C→D) while preserving the user's original request, rather than a random
+  // reroll.
+  const variationDirections = [
+    "Variation A — a different composition and camera angle.",
+    "Variation B — an alternative color palette and lighting mood.",
+    "Variation C — a more minimal, refined treatment.",
+    "Variation D — a bolder, more dramatic, high-impact treatment.",
+  ];
+  const variationCounterRef = useRef(0);
+  const variationsImage = useCallback(
+    (prompt: string) => {
+      if (!prompt.trim()) return;
+      const dir =
+        variationDirections[
+          variationCounterRef.current % variationDirections.length
+        ];
+      variationCounterRef.current += 1;
+      void send(
+        `${prompt.trim()}\n\nKeep the same subject and intent, but explore a fresh direction: ${dir}`,
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [send],
+  );
+
+  // Duplicate — create another instance from the same prompt (a fresh copy).
+  const duplicateImage = useCallback(
+    (prompt: string) => {
+      if (prompt.trim()) void send(prompt.trim());
+    },
+    [send],
+  );
+
+  const editImage = useCallback((url: string) => {
+    // Load the generated image into the composer so the user can describe an
+    // edit (routes to the gpt-image-1 editor on send).
+    setAttachInject({ key: Date.now(), url });
+    toast.success("Image added — describe your edit");
+    setTimeout(
+      () => document.getElementById(CHAT_COMPOSER_TEXTAREA_ID)?.focus(),
+      0,
+    );
+  }, []);
 
   // ── AI action: video via the existing video pipeline ────────
   async function generateVideoInChat() {
@@ -384,9 +672,57 @@ export function ChatStudio() {
     }
   }
 
-  function regenerate() {
-    if (lastUserRef.current) send(lastUserRef.current);
-  }
+  // Global keyboard shortcuts (Esc stop/close, / focus composer, ⌘N new chat,
+  // ⌘/ or Shift+? open help). Mirrors the legacy chat page for parity.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t &&
+        (t.tagName === "TEXTAREA" ||
+          t.tagName === "INPUT" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable);
+
+      if (e.key === "Escape") {
+        if (shortcutsOpen) {
+          setShortcutsOpen(false);
+          return;
+        }
+        if (abortRef.current) stop();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.code === "Slash") {
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (e.shiftKey && e.key === "?") {
+        if (typing) return;
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.code === "KeyN") {
+        e.preventDefault();
+        void newChat();
+        return;
+      }
+      if (
+        e.code === "Slash" &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !typing
+      ) {
+        e.preventDefault();
+        document.getElementById(CHAT_COMPOSER_TEXTAREA_ID)?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shortcutsOpen]);
 
   const lastAssistant = [...messages]
     .reverse()
@@ -422,9 +758,10 @@ export function ChatStudio() {
       </div>
 
       {/* Thread */}
-      <div className="glass flex min-w-0 flex-1 flex-col rounded-2xl border border-white/5">
+      <div className="glass relative flex min-w-0 flex-1 flex-col rounded-2xl border border-white/5">
         <div
           ref={threadRef}
+          onScroll={onThreadScroll}
           className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6"
         >
           {loadingMsgs ? (
@@ -451,12 +788,38 @@ export function ChatStudio() {
             </div>
           ) : (
             <ErrorBoundary>
-              {messages.map((m) => (
-                <MessageBubble key={m.id} message={m} />
+              {messages.map((m, i) => (
+                <MessageBubble
+                  key={m.id}
+                  message={m}
+                  isLast={i === messages.length - 1}
+                  onRegenerate={
+                    m.role === "ASSISTANT" ? regenerateLast : undefined
+                  }
+                  onRetry={m.error ? regenerateLast : undefined}
+                  onEditSubmit={m.role === "USER" ? submitEdit : undefined}
+                  onImageRegenerate={regenerateImage}
+                  onImageVariations={variationsImage}
+                  onImageEdit={editImage}
+                  onImageDuplicate={duplicateImage}
+                />
               ))}
+              <div ref={bottomRef} />
             </ErrorBoundary>
           )}
         </div>
+
+        {/* Scroll-to-bottom affordance (only when scrolled away from bottom) */}
+        {showScrollBtn && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            aria-label="Scroll to latest"
+            className="absolute bottom-28 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-white/10 bg-surface-800/90 text-gray-300 shadow-lg backdrop-blur transition-colors hover:text-white"
+          >
+            <ArrowDown className="h-4 w-4" />
+          </button>
+        )}
 
         {/* Action bar */}
         <div className="flex flex-wrap items-center gap-2 border-t border-white/5 px-4 py-2">
@@ -475,7 +838,7 @@ export function ChatStudio() {
           {lastAssistant && (
             <>
               <button
-                onClick={regenerate}
+                onClick={regenerateLast}
                 disabled={streaming}
                 className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs text-gray-300 hover:border-white/25 disabled:opacity-50"
               >
@@ -499,9 +862,11 @@ export function ChatStudio() {
         <div className="border-t border-white/5 p-3">
           <ChatInput
             onSend={send}
-            disabled={streaming}
+            isStreaming={streaming}
+            onStop={stop}
             composerInject={inject}
             onComposerInjectConsumed={() => setInject(null)}
+            attachInject={attachInject}
           />
         </div>
       </div>
@@ -546,6 +911,12 @@ export function ChatStudio() {
           </div>
         </div>
       </Modal>
+
+      {/* Keyboard shortcuts (opened via ⌘/Ctrl + / or Shift + ?) */}
+      <ChatShortcutsHelp
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+      />
     </div>
   );
 }

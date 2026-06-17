@@ -33,6 +33,9 @@ export interface RouteRequest {
   prompt?: string;
   negativePrompt?: string;
   inputImageUrl?: string;
+  // Multiple input images for reference/combine edits (gpt-image-1 edit accepts
+  // an image array). Additive — when absent, inputImageUrl is used as before.
+  inputImageUrls?: string[];
   inputVideoUrl?: string;
   width?: number;
   height?: number;

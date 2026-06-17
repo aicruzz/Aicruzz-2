@@ -17,7 +17,17 @@ import {
   CHAT_IMAGE_GEN_CREDITS,
   CHAT_IMAGE_EDIT_CREDITS_FAST,
   CHAT_IMAGE_EDIT_CREDITS_PRO,
+  CHAT_MAX_IMAGES,
 } from "./chat.types";
+import { planImageGeneration, classifyEditOp } from "./image-agent";
+import {
+  runCapability,
+  registerCapability,
+  buildDesignMeta,
+  type CapabilityContext,
+  type CapabilityId,
+  type ClassifiedAttachment,
+} from "./capabilities";
 import type { SendMessageInput, ChatSummary, ChatDetail } from "./chat.types";
 
 // Public Cloudinary delivery prefix, e.g. https://res.cloudinary.com/<cloud>/
@@ -209,6 +219,20 @@ async function resolveStoredUrl(url: string | null): Promise<string | null> {
   return url;
 }
 
+// Image to continue editing — only when the MOST RECENT message in the chat
+// carries an image. This recency gate means "add …", "make it …" etc. only
+// route to image editing while the user is actively in an image context (it
+// won't hijack a code/text conversation that produced an image far earlier).
+async function findLastChatImage(chatId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ imageUrl: chatMessages.imageUrl })
+    .from(chatMessages)
+    .where(eq(chatMessages.chatId, chatId))
+    .orderBy(desc(chatMessages.createdAt))
+    .limit(1);
+  return row?.imageUrl ?? null;
+}
+
 // Downloads a generated image (e.g. from DALL-E) and persists it to Cloudinary
 // so it lives in chat history forever and passes assertUploadedUrl checks.
 // Returns the public Cloudinary URL for storage.
@@ -252,7 +276,12 @@ async function detectImageIntent(content: string): Promise<boolean> {
       stream: false,
       model: "gpt-4o-mini",
       systemPrompt:
-        "You are an intent classifier. Reply with exactly one token: IMAGE if the user is asking the assistant to create, draw, render, or generate a picture/image/illustration; otherwise TEXT. No punctuation, no explanation.",
+        "You are an intent classifier. Reply with exactly one token: IMAGE if " +
+        "the user wants the assistant to produce a visual — e.g. create, draw, " +
+        "render, generate, design or illustrate a picture, image, illustration, " +
+        "logo, icon, poster, banner, flyer, app UI, interface, landing page, " +
+        "mockup, wireframe, avatar, sticker, wallpaper, character or artwork. " +
+        "Otherwise reply TEXT. No punctuation, no explanation.",
       messages: [{ role: "user", content: trimmed }],
     });
     const reply = (result.result.text ?? "").trim().toUpperCase();
@@ -281,10 +310,15 @@ async function detectImageEditIntent(content: string): Promise<boolean> {
       model: "gpt-4o-mini",
       systemPrompt:
         "You are an intent classifier for an image editor. The user has " +
-        "attached an image. Reply with exactly one token: EDIT if they are " +
-        "asking to modify, transform, retouch, restyle, change, fix, add to, " +
-        "remove from, or repose the image/subject; otherwise ASK (they only " +
-        "want a description, answer, or analysis). No punctuation, no explanation.",
+        "attached one or more images. Reply with exactly one token: EDIT if " +
+        "they want to produce a new/modified image from the upload(s) — e.g. " +
+        "modify, transform, retouch, restyle, recolor, change, fix, add to, " +
+        "remove from, repose, swap a face/head, replace the background or sky, " +
+        "change clothing/hair, remove or replace an object, outpaint/extend, " +
+        "combine/merge the images, apply a style (cartoon/anime/Pixar/Ghibli/" +
+        "realistic), make a variation, or recreate/redesign something 'like' " +
+        "the sample. Reply ASK only if they purely want a description, answer, " +
+        "analysis, OCR or translation. No punctuation, no explanation.",
       messages: [{ role: "user", content: trimmed }],
     });
     const reply = (result.result.text ?? "").trim().toUpperCase();
@@ -299,19 +333,136 @@ async function detectImageEditIntent(content: string): Promise<boolean> {
 
 /**
  * Build an AI-compatible message content block.
- * If an imageUrl is present, we send a multipart content array
- * so vision-capable models (GPT-4o, Claude, etc.) can see the image.
+ * If one or more imageUrls are present, we send a multipart content array
+ * (one image_url block per image, in order) so vision-capable models
+ * (GPT-4o, Claude, etc.) can see every attached image.
  */
 function buildUserContent(
   text: string,
-  imageUrl?: string | null,
+  images?: string | string[] | null,
 ): string | { type: string; text?: string; image_url?: { url: string } }[] {
-  if (!imageUrl) return text;
+  const urls = (Array.isArray(images) ? images : images ? [images] : []).filter(
+    Boolean,
+  ) as string[];
+
+  if (!urls.length) return text;
 
   return [
-    { type: "image_url", image_url: { url: imageUrl } },
+    ...urls.map((url) => ({
+      type: "image_url",
+      image_url: { url },
+    })),
     { type: "text", text },
   ];
+}
+
+// ─── IMAGE INTENT ROUTER ──────────────────────────────────────
+//
+// Deterministic fast-paths + cheap LLM tie-breakers that classify every turn
+// into TEXT | GENERATE | EDIT | VISION *before* any text generation runs. This
+// guarantees an image request can never fall through into the GPT-4o text
+// pipeline. Regex fast-paths also skip the classifier round-trip (latency win).
+
+// Explicit "force image" overrides — the user is telling us, in words, that the
+// output must be an image (not prose).
+const IMAGE_OVERRIDE_RE =
+  /\b(image\s+not\s+text|not\s+text|image\s+only|as\s+an?\s+image|in\s+image\s+form|output\s+an?\s+image|respond\s+with\s+an?\s+image|reply\s+with\s+an?\s+image|give\s+me\s+an?\s+image|generate\s+an?\s+image|make\s+an?\s+image|create\s+an?\s+image)\b/i;
+
+// Verb + visual-noun within a short window → a clear text-to-image request.
+const IMAGE_REQUEST_RE =
+  /\b(create|generate|draw|render|make|design|paint|sketch|produce|illustrate|visuali[sz]e|imagine|compose|mock\s?up)\b[\s\S]{0,60}\b(image|picture|photo|photograph|illustration|drawing|art(?:work)?|painting|logo|poster|wallpaper|portrait|render|mock-?up|ui|interface|landing\s?page|web\s?page|banner|flyer|icon|avatar|sticker|thumbnail|wireframe|infographic|scene|character|design|emoji)\b/i;
+
+// Explicit image-editing operations (only consulted when an image is attached).
+const EDIT_REQUEST_RE =
+  /\b(remove|erase|delete|replace|swap|change|edit|retouch|restyle|recolou?r|inpaint|out-?paint|extend|expand|combine|merge|composite|blend|cut\s?-?out|background|backdrop|sky|face\s?-?swap|head\s?-?swap|swap\s+(?:the\s+)?(?:face|head|background)|hair|outfit|clothing|clothes|cartoon|anime|ghibli|pixar|style\s?transfer|upscale|enhance|colou?rize|like\s+the\s+(?:uploaded|attached|sample|reference|example)|based\s+on\s+(?:this|the\s+(?:image|photo|upload|sample))|using\s+(?:this|the\s+(?:image|photo|upload))|from\s+(?:this|the)\s+(?:image|photo|sample)|recreate|redesign|variation|variant)\b/i;
+
+// Pure analysis/OCR/description → keep on the GPT-4o vision path.
+const VISION_REQUEST_RE =
+  /\b(what(?:'s| is| are| does| can)|describe|explain|read|ocr|extract\s+(?:the\s+)?text|transcribe|translate|identify|analy[sz]e|caption|tell\s+me\s+about|how\s+many|count\b|is\s+(?:this|there))\b/i;
+
+// Iterative-edit continuation openers — short imperative visual tweaks that
+// refer to "the previous image" implicitly. Used only when no new image is
+// attached AND the chat already has an image to continue from.
+const CONTINUATION_RE =
+  /^\s*(make (?:it|this|them|the (?:image|scene|background|sky))|add|remove|erase|change|replace|swap|turn (?:it|this) into|zoom (?:in|out)|brighten|darken|recolou?r|restyle|colou?rize|put (?:it|him|her|them|a)|give (?:it|him|her|them)|set (?:it|the scene)|at night|during the day|in (?:the )?(?:day|night|rain|snow|fog)|more|less|crop|rotate|flip|extend|expand)\b/i;
+
+function looksLikeImageRequest(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed || trimmed.length > 2000) return false;
+  if (/^create an image of\b/i.test(trimmed)) return true; // action-bar scaffold
+  if (IMAGE_OVERRIDE_RE.test(trimmed)) return true;
+  return IMAGE_REQUEST_RE.test(trimmed);
+}
+
+export type ImageRoute = "TEXT" | "GENERATE" | "EDIT" | "VISION";
+
+/**
+ * Classify a turn into the correct pipeline. Deterministic fast-paths resolve
+ * the common cases instantly; only genuinely ambiguous turns pay for a cheap
+ * gpt-4o-mini tie-breaker. Defaults are always the safe ones (TEXT / VISION).
+ */
+async function classifyImageRoute(
+  content: string,
+  hasImage: boolean,
+): Promise<ImageRoute> {
+  const trimmed = content.trim();
+  if (!trimmed) return "TEXT";
+  const override = IMAGE_OVERRIDE_RE.test(trimmed);
+
+  if (hasImage) {
+    // An attached image + any editing verb (or a force-image override that
+    // references the upload) → professional edit. Uploaded images are never
+    // ignored for an image request.
+    if (override || EDIT_REQUEST_RE.test(trimmed)) return "EDIT";
+    // Clear analysis/OCR phrasing → vision answer.
+    if (VISION_REQUEST_RE.test(trimmed)) return "VISION";
+    // Ambiguous → cheap tie-breaker (EDIT vs analyze).
+    return (await detectImageEditIntent(trimmed)) ? "EDIT" : "VISION";
+  }
+
+  // No attachment.
+  if (override || looksLikeImageRequest(trimmed)) return "GENERATE";
+  return (await detectImageIntent(trimmed)) ? "GENERATE" : "TEXT";
+}
+
+// The prompt builder (plan → category directives → fidelity wrapper) now lives
+// in the Image Agent (./image-agent). Generation calls planImageGeneration().
+
+// Smart QA — true when a provider response did not actually produce a usable
+// image: a failure, or "success" with no URL and no real base64 payload (text
+// returned instead of an image, an empty body, or a tiny/corrupt result). A
+// genuine gpt-image-1 image is hundreds of KB of base64, so a very short
+// payload signals a broken/empty generation that should be retried.
+const MIN_B64_BYTES = 5000; // ~3.7 KB — well below any real image, above noise
+function isUnusableImageResult(result: {
+  success: boolean;
+  result: { outputUrl?: string; b64Image?: string };
+}): boolean {
+  if (!result.success) return true;
+  const hasUrl = !!result.result.outputUrl;
+  const hasB64 =
+    !!result.result.b64Image && result.result.b64Image.length > MIN_B64_BYTES;
+  return !hasUrl && !hasB64;
+}
+
+/**
+ * Run an image route call with output verification + one silent retry. If the
+ * first attempt yields no usable image, retry once with the same request before
+ * returning — so an image request never degrades to text/empty without a fight.
+ */
+async function routeImageWithRetry(
+  req: Parameters<typeof aiRouter.route>[0],
+): Promise<Awaited<ReturnType<typeof aiRouter.route>>> {
+  let result = await aiRouter.route(req);
+  if (isUnusableImageResult(result)) {
+    logger.warn("Image route returned no usable image; retrying once", {
+      module: req.module,
+      provider: result.provider,
+      internalError: result.result.error,
+    });
+    result = await aiRouter.route(req);
+  }
+  return result;
 }
 
 // ─── SEND MESSAGE (real streaming) ───────────────────────────
@@ -324,14 +475,22 @@ export async function sendMessage(
   const {
     content,
     imageUrl,
+    imageUrls,
     videoUrl,
     model,
     strategy = "AUTO",
     editQuality = "FAST",
   } = input;
 
+  // Normalize to an ordered image array (imageUrls supersedes the single
+  // imageUrl). imageUrl is kept = images[0] so all existing single-image
+  // call sites and the DB (single imageUrl column) keep working.
+  const images = (imageUrls?.length ? imageUrls : imageUrl ? [imageUrl] : [])
+    .filter(Boolean)
+    .slice(0, CHAT_MAX_IMAGES) as string[];
+
   // 1. Validate S3 URLs — reject anything that didn't come from your bucket
-  if (imageUrl) assertUploadedUrl(imageUrl, "imageUrl");
+  for (const url of images) assertUploadedUrl(url, "imageUrl");
   if (videoUrl) assertUploadedUrl(videoUrl, "videoUrl");
 
   // 2. Resolve or create chat
@@ -347,27 +506,68 @@ export async function sendMessage(
     if (!existing) throw new AppError("Chat not found", 404);
   }
 
-  // 2a. Auto-detect image-edit intent — user attached an image AND is asking
-  // us to transform/retouch it. Routes to the professional gpt-image-1 editor
-  // instead of a vision/text turn.
-  if (imageUrl && !videoUrl && (await detectImageEditIntent(content))) {
-    await handleImageTransform(
-      userId,
-      chatId,
-      content,
-      imageUrl,
-      editQuality,
-      res,
-    );
-    return;
-  }
+  // 2. Capability-first dispatch — classify attachments, detect the capability,
+  // then run it through the engine. Providers are chosen downstream by the AI
+  // router; Chat Studio never names a provider.
+  const attachments: ClassifiedAttachment[] = [
+    ...images.map((url) => ({ url, kind: "image" as const })),
+    ...(videoUrl ? [{ url: videoUrl, kind: "video" as const }] : []),
+  ];
+  const ctx: CapabilityContext = {
+    userId,
+    chatId,
+    content,
+    images,
+    videoUrl,
+    attachments,
+    editQuality,
+    model,
+    strategy,
+    res,
+  };
 
-  // 2b. Auto-detect image-generation intent (only for plain text messages —
-  // if the user attached media, treat it as a vision/text turn).
-  if (!imageUrl && !videoUrl && (await detectImageIntent(content))) {
-    await handleImageGeneration(userId, chatId, content, res);
-    return;
+  const capabilityId = await detectCapability(ctx);
+  await runCapability(capabilityId, ctx);
+}
+
+// ─── CAPABILITY DETECTION ─────────────────────────────────────
+// Map a turn to a capability id (the optimal provider is chosen later by the
+// AI router). Reuses the image intent router + continuation logic so an image
+// request can never be answered with prose.
+async function detectCapability(ctx: CapabilityContext): Promise<CapabilityId> {
+  const { content, images, videoUrl, chatId } = ctx;
+  const primaryImage = images[0];
+  const route: ImageRoute = videoUrl
+    ? "TEXT"
+    : await classifyImageRoute(content, !!primaryImage);
+
+  // Edit/transform — attached image(s) the user wants changed (all forwarded).
+  if (primaryImage && !videoUrl && (route === "EDIT" || route === "GENERATE")) {
+    return "image_editing";
   }
+  // Text-to-image generation — image request with no attachment.
+  if (!primaryImage && !videoUrl && route === "GENERATE") {
+    return "image_generation";
+  }
+  // Iterative continuation — tweak the most recent image without re-uploading.
+  if (!primaryImage && !videoUrl && CONTINUATION_RE.test(content)) {
+    const lastImage = await findLastChatImage(chatId);
+    if (lastImage) {
+      ctx.sourceImages = [lastImage];
+      return "image_continuation";
+    }
+  }
+  // Otherwise: vision (sees attached images) or plain text.
+  return images.length ? "vision" : "text_chat";
+}
+
+// ─── TEXT / VISION CAPABILITY ─────────────────────────────────
+// Streaming chat turn (text_chat + vision). Behavior unchanged — relocated out
+// of sendMessage so it can be a registered capability executor.
+async function handleTextTurn(ctx: CapabilityContext): Promise<void> {
+  const { userId, chatId, content, images, videoUrl, model, strategy, res } =
+    ctx;
+  const primaryImage = images[0];
 
   // 3. Load history — include imageUrl so past images stay in context
   const history = await db
@@ -390,16 +590,19 @@ export async function sendMessage(
     metadata: { chatId },
   });
 
-  // 5. Save user message — imageUrl/videoUrl are now guaranteed S3 URLs or null
+  // 5. Save user message — imageUrl/videoUrl are now guaranteed S3 URLs or null.
+  // The DB stores a single imageUrl column; we persist the first (primary)
+  // image for history. All uploaded images are still sent to the model below.
   await db.insert(chatMessages).values({
     chatId,
     role: "USER",
     content,
-    imageUrl,
+    imageUrl: primaryImage,
     videoUrl,
   });
 
-  // 6. Build message array for AI
+  // 6. Build message array for AI — the current turn includes every uploaded
+  // image so vision models see all of them; history keeps its single image.
   const messages = [
     ...history.map((m) => ({
       role: m.role.toLowerCase() as "user" | "assistant" | "system",
@@ -410,7 +613,7 @@ export async function sendMessage(
     })),
     {
       role: "user" as const,
-      content: buildUserContent(content, imageUrl),
+      content: buildUserContent(content, images),
     },
   ];
 
@@ -516,7 +719,8 @@ export async function sendMessage(
       tokensUsed,
       creditsUsed: CHAT_CREDITS_PER_MESSAGE,
       fallbackUsed: result.fallbackUsed,
-      imageUrl: await resolveStoredUrl(imageUrl ?? null),
+      imageUrl: await resolveStoredUrl(primaryImage ?? null),
+      imageUrls: images.length ? images : null,
       videoUrl: await resolveStoredUrl(videoUrl ?? null),
     });
 
@@ -563,6 +767,14 @@ async function handleImageGeneration(
 
   sendEvent("chat_id", { chatId });
 
+  // Image Agent — analyse the request, plan it, classify its type, and build a
+  // category-specialised, self-validated prompt. Also yields a loader op so the
+  // client shows operation-specific phases. Never throws (deterministic fallback).
+  const { prompt: builtPrompt, plan, op } = await planImageGeneration(prompt);
+  // Tell the client this is an image turn (premium loader, not a typing
+  // indicator) and which operation, so it shows matching phase messages.
+  sendEvent("mode", { kind: "image", op });
+
   const deduction = await deductCredits({
     userId,
     credits: CHAT_IMAGE_GEN_CREDITS,
@@ -575,18 +787,19 @@ async function handleImageGeneration(
     .insert(chatMessages)
     .values({ chatId, role: "USER", content: prompt });
 
-  sendEvent("chunk", { text: "Generating image…" });
-
   try {
-    const result = await aiRouter.route({
+    // Generate at top quality with output verification + one silent retry — an
+    // image request must never come back as text or empty. qualityMode is passed
+    // only on Chat Studio's IMAGE call, so other modules are unaffected.
+    const result = await routeImageWithRetry({
       userId,
       module: "IMAGE",
       strategy: "AUTO",
       stream: false,
-      prompt,
+      prompt: builtPrompt,
+      qualityMode: "ULTRA",
     });
 
-    // ← CHANGED: accept either a URL or base64 from gpt-image-1
     if (!result.success || (!result.result.outputUrl && !result.result.b64Image)) {
       logger.warn("Chat image gen: router failure", {
         provider: result.provider,
@@ -650,6 +863,14 @@ async function handleImageGeneration(
       imageUrl: presignedUrl,
       videoUrl: null,
       assistantImage: true,
+      // Original user prompt — powers Copy prompt / Regenerate / Variations.
+      imagePrompt: prompt,
+      // Image metadata — version history + gallery (kept in-session).
+      revisedPrompt: builtPrompt,
+      operation: op,
+      category: plan.category,
+      // Design-to-code metadata (UI etc.) — pipeline prep, no export performed.
+      designMeta: buildDesignMeta(plan.category),
     });
 
     res.end();
@@ -686,10 +907,14 @@ async function handleImageTransform(
   userId: string,
   chatId: string,
   prompt: string,
-  originalImageUrl: string,
+  originalImageUrls: string[],
   editQuality: "FAST" | "PRO",
   res: Response,
 ): Promise<void> {
+  // The first uploaded image is the "before" shown in the slider; any further
+  // images are passed to gpt-image-1 as additional reference inputs.
+  const originalImageUrl = originalImageUrls[0];
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -701,7 +926,12 @@ async function handleImageTransform(
     if (typeof (res as any).flush === "function") (res as any).flush();
   };
 
+  const editOp = classifyEditOp(prompt);
+
   sendEvent("chat_id", { chatId });
+  // Image turn — client shows the premium loader (not a typing indicator).
+  // Classify the edit op so the loader shows operation-specific phases.
+  sendEvent("mode", { kind: "image", op: editOp });
 
   const isPro = editQuality === "PRO";
   const credits = isPro
@@ -724,20 +954,21 @@ async function handleImageTransform(
     imageUrl: originalImageUrl,
   });
 
-  sendEvent("chunk", {
-    text: isPro
-      ? "Transforming image in PRO mode (high quality + upscale)…"
-      : "Transforming image…",
-  });
+  // No text chunk — the client renders an image skeleton (via the "mode" event)
+  // while the edit runs, then swaps in the before/after result.
 
   try {
-    const result = await aiRouter.route({
+    // Output verification + one silent retry, same guarantee as generation.
+    const result = await routeImageWithRetry({
       userId,
       module: "IMAGE_TRANSFORM",
       strategy: "AUTO",
       stream: false,
       prompt,
       inputImageUrl: originalImageUrl,
+      // All uploaded images go to gpt-image-1's edit endpoint as references
+      // (combine/blend). Single image keeps the original behavior.
+      inputImageUrls: originalImageUrls,
       // FAST → STANDARD (quality 'medium'); PRO → ULTRA (quality 'high' + upscale).
       qualityMode: isPro ? "ULTRA" : "STANDARD",
     });
@@ -810,6 +1041,10 @@ async function handleImageTransform(
       assistantImage: true,
       mode: "IMAGE_TRANSFORM",
       quality: editQuality,
+      // Version-history metadata (in-session): the edit op + parent image.
+      operation: editOp,
+      imagePrompt: prompt,
+      parentImageUrl: await resolveStoredUrl(originalImageUrl),
     });
 
     res.end();
@@ -901,3 +1136,86 @@ export async function enhancePrompt(
     throw new AppError(CLIENT_AI_UNAVAILABLE, 502);
   }
 }
+
+// ─── CAPABILITY REGISTRATION ──────────────────────────────────
+// Register the capabilities available today. Each executor delegates to an
+// existing streaming handler — the optimal provider is selected by the AI
+// router, so Chat Studio stays provider-agnostic. Future capabilities (video,
+// audio, PDF, search, Figma…) are registered as "coming_soon" in ./capabilities
+// and become live by adding an executor — no change to this dispatch.
+function registerChatCapabilities(): void {
+  registerCapability({
+    id: "text_chat",
+    name: "Text Chat",
+    description: "Conversational text responses.",
+    acceptedInputs: ["text"],
+    producedOutputs: ["text"],
+    permissions: [],
+    availability: "available",
+    priority: 10,
+    execute: (ctx) => handleTextTurn(ctx),
+  });
+  registerCapability({
+    id: "vision",
+    name: "Vision",
+    description: "Understand and answer questions about uploaded images.",
+    acceptedInputs: ["text", "image"],
+    producedOutputs: ["text"],
+    permissions: [],
+    availability: "available",
+    priority: 20,
+    execute: (ctx) => handleTextTurn(ctx),
+  });
+  registerCapability({
+    id: "image_generation",
+    name: "Image Generation",
+    description: "Create images from a text description.",
+    acceptedInputs: ["text"],
+    producedOutputs: ["image"],
+    permissions: [],
+    availability: "available",
+    priority: 40,
+    execute: (ctx) =>
+      handleImageGeneration(ctx.userId, ctx.chatId, ctx.content, ctx.res),
+  });
+  registerCapability({
+    id: "image_editing",
+    name: "Image Editing",
+    description: "Edit or transform uploaded images (multi-image references).",
+    acceptedInputs: ["text", "image"],
+    producedOutputs: ["image"],
+    permissions: [],
+    availability: "available",
+    priority: 50,
+    execute: (ctx) =>
+      handleImageTransform(
+        ctx.userId,
+        ctx.chatId,
+        ctx.content,
+        ctx.images,
+        ctx.editQuality,
+        ctx.res,
+      ),
+  });
+  registerCapability({
+    id: "image_continuation",
+    name: "Continue Image",
+    description: "Iteratively edit the most recent image in the chat.",
+    acceptedInputs: ["text"],
+    producedOutputs: ["image"],
+    permissions: [],
+    availability: "available",
+    priority: 45,
+    execute: (ctx) =>
+      handleImageTransform(
+        ctx.userId,
+        ctx.chatId,
+        ctx.content,
+        ctx.sourceImages ?? [],
+        ctx.editQuality,
+        ctx.res,
+      ),
+  });
+}
+
+registerChatCapabilities();

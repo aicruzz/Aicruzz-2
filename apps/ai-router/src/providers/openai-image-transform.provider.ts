@@ -47,7 +47,15 @@ export class OpenAIImageTransformProvider extends BaseProvider {
   async execute(request: RouteRequest): Promise<ProviderResult> {
     const start = Date.now();
     try {
-      if (!request.inputImageUrl) {
+      // Accept one or many input images. Multiple images are passed to
+      // gpt-image-1's edit endpoint as references for combine/blend edits.
+      const inputUrls =
+        request.inputImageUrls?.length
+          ? request.inputImageUrls
+          : request.inputImageUrl
+            ? [request.inputImageUrl]
+            : [];
+      if (!inputUrls.length) {
         throw new Error('IMAGE_TRANSFORM requires an input image to edit');
       }
 
@@ -56,11 +64,15 @@ export class OpenAIImageTransformProvider extends BaseProvider {
       const size = this.resolveSize(request);
       const prompt = enhanceTransformPrompt(request.prompt ?? '');
 
-      // 1. Pull the uploaded (Cloudinary) image into memory.
-      const sourceBytes = await this.downloadImage(request.inputImageUrl);
-      const image = await toFile(sourceBytes, 'input.png', {
-        type: 'image/png',
-      });
+      // 1. Pull the uploaded (Cloudinary) image(s) into memory. A single image
+      //    keeps the original behavior; multiple become a reference array.
+      const files = await Promise.all(
+        inputUrls.map(async (url, i) => {
+          const bytes = await this.downloadImage(url);
+          return toFile(bytes, `input-${i}.png`, { type: 'image/png' });
+        }),
+      );
+      const image = files.length === 1 ? files[0] : files;
 
       // 2. Edit via gpt-image-1 (one transient retry before giving up).
       const b64 = await this.runEditWithRetry({ image, prompt, size, quality });
@@ -103,7 +115,9 @@ export class OpenAIImageTransformProvider extends BaseProvider {
   }
 
   private async runEditWithRetry(args: {
-    image: Awaited<ReturnType<typeof toFile>>;
+    image:
+      | Awaited<ReturnType<typeof toFile>>
+      | Awaited<ReturnType<typeof toFile>>[];
     prompt: string;
     size: EditSize;
     quality: EditQuality;

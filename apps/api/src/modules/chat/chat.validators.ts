@@ -15,6 +15,16 @@ export const sendMessageValidator = [
     .notEmpty()
     .withMessage('chatId must be a non-empty string'),
 
+  body('imageUrls')
+    .optional()
+    .isArray({ max: 4 })
+    .withMessage('imageUrls must be an array of at most 4 items'),
+
+  body('imageUrls.*')
+    .isString()
+    .notEmpty()
+    .withMessage('Each imageUrl must be a non-empty string'),
+
   body('model')
     .optional()
     .isString()

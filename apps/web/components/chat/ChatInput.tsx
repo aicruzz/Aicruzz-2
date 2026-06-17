@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Send, Paperclip } from "lucide-react";
+import { Send, Paperclip, Square } from "lucide-react";
 import { clsx } from "clsx";
 import toast from "react-hot-toast";
 import { FilePreview } from "@/components/chat/FilePreview";
@@ -20,11 +20,17 @@ interface ChatInputProps {
     imageUrl?: string,
     videoUrl?: string,
     editQuality?: "FAST" | "PRO",
+    imageUrls?: string[],
   ) => void;
   disabled?: boolean;
   placeholder?: string;
   composerInject?: { key: number; text: string } | null;
   onComposerInjectConsumed?: () => void;
+  /** Inject an already-uploaded image as an attachment (e.g. "Edit image"). */
+  attachInject?: { key: number; url: string; name?: string } | null;
+  /** When true, the send button becomes a Stop button wired to onStop. */
+  isStreaming?: boolean;
+  onStop?: () => void;
 }
 
 // Upload helper (unchanged)
@@ -79,6 +85,9 @@ export function ChatInput({
   placeholder,
   composerInject,
   onComposerInjectConsumed,
+  attachInject,
+  isStreaming = false,
+  onStop,
 }: ChatInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
@@ -92,6 +101,7 @@ export function ChatInput({
   const canSend =
     (text.trim().length > 0 || attachments.some((a) => a.uploadedUrl)) &&
     !disabled &&
+    !isStreaming &&
     !attachments.some((a) => a.uploading);
 
   useEffect(() => {
@@ -99,6 +109,31 @@ export function ChatInput({
     setText(composerInject.text);
     onComposerInjectConsumed?.();
   }, [composerInject, onComposerInjectConsumed]);
+
+  // Inject an already-uploaded image (e.g. "Edit image" on a generated result)
+  // as a ready attachment. Deduped by key so it only runs once per request.
+  const lastAttachKeyRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!attachInject) return;
+    if (lastAttachKeyRef.current === attachInject.key) return;
+    lastAttachKeyRef.current = attachInject.key;
+    setAttachments((prev) => {
+      if (prev.length >= 4) return prev;
+      if (prev.some((a) => a.uploadedUrl === attachInject.url)) return prev;
+      return [
+        ...prev,
+        {
+          file: new File([], attachInject.name ?? "image.png", {
+            type: "image/png",
+          }),
+          previewUrl: attachInject.url,
+          uploadedUrl: attachInject.url,
+          uploading: false,
+          progress: 100,
+        },
+      ];
+    });
+  }, [attachInject]);
 
   function handleInput(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setText(e.target.value);
@@ -120,10 +155,13 @@ export function ChatInput({
   const handleSend = useCallback(() => {
     if (!canSend) return;
 
-    const image = attachments.find((a) => !a.file.type.startsWith("video/"))?.uploadedUrl;
+    // Collect ALL uploaded image URLs in selection order (not just the first).
+    const imageUrls = attachments
+      .filter((a) => !a.file.type.startsWith("video/") && a.uploadedUrl)
+      .map((a) => a.uploadedUrl as string);
     const video = attachments.find((a) => a.file.type.startsWith("video/"))?.uploadedUrl;
 
-    onSend(text.trim(), image, video, editQuality);
+    onSend(text.trim(), imageUrls[0], video, editQuality, imageUrls);
 
     setText("");
     setAttachments([]);
@@ -134,9 +172,27 @@ export function ChatInput({
   }, [canSend, text, attachments, editQuality, onSend]);
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter sends; Shift+Enter inserts a newline. Cmd/Ctrl+Enter also sends.
+    // Guard against IME composition so it never sends mid-composition.
+    const composing =
+      e.nativeEvent.isComposing || (e.nativeEvent as { keyCode?: number }).keyCode === 229;
+    if (e.key === "Enter" && !e.shiftKey && !composing) {
+      e.preventDefault();
+      handleSend();
+      return;
+    }
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       handleSend();
+      return;
+    }
+    // Escape clears pending attachments (matches documented shortcuts).
+    if (e.key === "Escape" && attachments.length > 0) {
+      e.preventDefault();
+      setAttachments((prev) => {
+        prev.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+        return [];
+      });
     }
   }
 
@@ -239,6 +295,7 @@ export function ChatInput({
         <div className="relative flex-1">
           <textarea
             ref={textareaRef}
+            id={CHAT_COMPOSER_TEXTAREA_ID}
             value={text}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
@@ -250,19 +307,31 @@ export function ChatInput({
           />
         </div>
 
-        {/* Send */}
-        <button
-          onClick={handleSend}
-          disabled={!canSend}
-          className={clsx(
-            "flex h-10 w-10 items-center justify-center rounded-xl",
-            canSend
-              ? "bg-brand-gradient text-white"
-              : "bg-surface-700 text-gray-600",
-          )}
-        >
-          <Send className="h-4 w-4" />
-        </button>
+        {/* Send / Stop — while streaming the action becomes Stop. */}
+        {isStreaming && onStop ? (
+          <button
+            onClick={onStop}
+            aria-label="Stop generating"
+            title="Stop generating"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/15 bg-surface-700 text-gray-200 transition-colors hover:border-brand-500/40 hover:text-white"
+          >
+            <Square className="h-3.5 w-3.5 fill-current" />
+          </button>
+        ) : (
+          <button
+            onClick={handleSend}
+            disabled={!canSend}
+            aria-label="Send message"
+            className={clsx(
+              "flex h-10 w-10 items-center justify-center rounded-xl",
+              canSend
+                ? "bg-brand-gradient text-white"
+                : "bg-surface-700 text-gray-600",
+            )}
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        )}
       </div>
     </div>
   );

@@ -4,6 +4,9 @@ export interface SendMessageInput {
   chatId?: string;        // omit to create a new chat
   content: string;
   imageUrl?: string;
+  // Up to CHAT_MAX_IMAGES uploaded images, in display order. When present this
+  // supersedes the single imageUrl (imageUrl is kept = imageUrls[0] for compat).
+  imageUrls?: string[];
   videoUrl?: string;
   model?: string;
   strategy?: 'COST' | 'SPEED' | 'QUALITY' | 'AUTO';
@@ -47,6 +50,9 @@ export interface ChatMessageDto {
   latencyMs: number | null;
   createdAt: Date;
 }
+
+// Maximum number of images a single chat message may attach.
+export const CHAT_MAX_IMAGES = 4;
 
 // Cost per message in credits
 export const CHAT_CREDITS_PER_MESSAGE = 2;
