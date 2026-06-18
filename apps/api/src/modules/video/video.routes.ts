@@ -9,21 +9,22 @@ import {
   isCloudinaryConfigured,
 } from '../../config/cloudinary';
 import { createVideoJobValidator, listJobsValidator } from './video.validators';
+import { videoGenerateRateLimiter } from '../../middleware/rateLimit.middleware';
+import { logger } from '../../utils/logger';
 import * as videoController from './video.controller';
 
 const router = Router();
 
-// Webhook is unauthenticated (called internally by AI router)
-// Verified by shared secret header
+// Webhook is unauthenticated (called internally by AI router); verified by a
+// shared secret header. NEVER log the secret. The header can arrive as a
+// string[] behind some proxies, so normalize before comparing.
 router.post('/webhook/:jobId', (req, res, next) => {
-  const secret = req.headers['x-router-secret'];
-  
-  // Add this temporarily
-  console.log('Received secret:', JSON.stringify(secret));
-  console.log('Expected secret:', JSON.stringify(env.AI_ROUTER_SECRET));
-  console.log('Match:', secret === env.AI_ROUTER_SECRET);
-  
-  if (secret !== env.AI_ROUTER_SECRET) {
+  const header = req.headers['x-router-secret'];
+  const secret = Array.isArray(header) ? header[0] : header;
+  if (!secret || secret !== env.AI_ROUTER_SECRET) {
+    logger.warn('Video webhook rejected: invalid router secret', {
+      jobId: req.params.jobId,
+    });
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
@@ -55,9 +56,11 @@ router.get('/events/:jobId',  videoController.streamJobEvents);
 // GET  /api/video/estimate
 router.get('/estimate', videoController.estimateCredits);
 
-// POST /api/video/generate
+// POST /api/video/generate — expensive (GPU render + credits); per-user limiter
+// on top of the global one to prevent abuse/accidental floods.
 router.post(
   '/generate',
+  videoGenerateRateLimiter,
   createVideoJobValidator,
   validate,
   videoController.createVideoJob,
@@ -91,7 +94,9 @@ router.post(
       });
       res.json({ success: true, data: { url } });
     } catch (err) {
-      console.error('[video/upload-input] Cloudinary upload failed', err);
+      logger.error('[video/upload-input] Cloudinary upload failed', {
+        message: err instanceof Error ? err.message : String(err),
+      });
       res.status(502).json({ success: false, message: 'Upload failed' });
     }
   },

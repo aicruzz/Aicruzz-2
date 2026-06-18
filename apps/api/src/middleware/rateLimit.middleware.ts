@@ -38,6 +38,21 @@ export const walletRateLimiter = rateLimit({
   },
 });
 
+// Per-user limiter for video generation (expensive GPU render + credit spend).
+// Keyed by authenticated user so one account can't flood the render queue.
+export const videoGenerateRateLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) =>
+    (req as { user?: { userId?: string } }).user?.userId ?? req.ip ?? 'unknown',
+  message: {
+    success: false,
+    message: 'Too many video generations. Please slow down and try again shortly.',
+  },
+});
+
 // Limiter for API key usage (per-key enforcement done separately)
 export const apiKeyRateLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute

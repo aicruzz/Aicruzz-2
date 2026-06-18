@@ -3,6 +3,7 @@ import { FallbackService, emptyDiagnostics } from './fallback.service';
 import type { FallbackOptions, FallbackOutcome } from './fallback.service';
 import type { ProviderId, ProviderResult, RouteRequest } from '../types';
 import { uploadKeyframe, isMediaStorageConfigured } from '../utils/media-storage';
+import { recordVideoOutcome } from './video-learning';
 import {
   aspectRatioFromDimensions,
   resolveOpenAIImageSize,
@@ -165,6 +166,15 @@ export class PipelineService {
       console.log(`[Pipeline:${PIPELINE_MODE}] keyframe ready → ${url}`);
     }
 
+    // Hedged execution (config hook, disabled by default): for expensive
+    // ULTRA requests with a low predicted success probability, a second
+    // provider could be launched shortly after the first and the first valid
+    // result wins (cancelling the slower run). This is the single, documented
+    // extension point — set VIDEO_HEDGE_ENABLED=true and implement a concurrent
+    // race here using `animateChain`. Kept OFF so behavior + cost are unchanged.
+    const HEDGE_ENABLED = process.env.VIDEO_HEDGE_ENABLED === 'true';
+    void HEDGE_ENABLED; // reserved — sequential fallback below is the default.
+
     // Exhaust the WHOLE provider chain (each provider + its retries) so a video
     // fails only when every supported provider has genuinely failed. With N
     // providers and 1 retry each, that's N*2 total attempts.
@@ -185,6 +195,17 @@ export class PipelineService {
       provider: outcome.provider,
       success: outcome.result.success,
     });
+
+    // Feed the self-improving VIDEO learning signal: record the final render
+    // outcome (provider, success, latency, retries) so provider ranking adapts.
+    if (request.module === 'VIDEO') {
+      recordVideoOutcome({
+        provider: outcome.provider,
+        success: outcome.result.success,
+        latencyMs: outcome.result.latencyMs,
+        retries: Math.max(0, (outcome.attempts ?? 1) - 1),
+      });
+    }
     console.log(
       `[Pipeline:${PIPELINE_MODE}] animate provider=${outcome.provider} ` +
         `success=${outcome.result.success}`,

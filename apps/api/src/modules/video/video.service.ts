@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import axios from 'axios';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../../config/database';
 import { videoJobs, generationJobsMetadata } from '../../db/schema';
 import { aiRouter } from '../../services/ai-router.client';
@@ -30,6 +31,7 @@ import {
 import {
   planVideoGeneration,
   buildVariationPrompt,
+  buildContinuityDirective,
   type VideoMode,
 } from './video-agent';
 import {
@@ -94,12 +96,31 @@ export async function createVideoJob(
   let inputImageUrl = input.inputImageUrl;
   const parentJobId = input.parentJobId ?? null;
   let mode: VideoMode = inputImageUrl ? 'IMAGE_TO_VIDEO' : 'TEXT_TO_VIDEO';
+  let continuity = '';
   if (parentJobId) {
     const parent = await getJobForContinuation(userId, parentJobId);
-    const frame = parent ? selectContinuationFrame(parent) : null;
-    if (frame) {
-      inputImageUrl = frame;
-      mode = 'CONTINUATION';
+    if (parent) {
+      const frame = selectContinuationFrame(parent);
+      if (frame) {
+        inputImageUrl = frame;
+        mode = 'CONTINUATION';
+      }
+      // Creative project memory: carry the established look forward so this
+      // shot feels like part of the same series (unless the user changes it).
+      const parentPlan = (
+        parent.agentMeta as
+          | {
+              plan?: {
+                style?: string;
+                mood?: string;
+                palette?: string;
+                camera?: string;
+                lighting?: string;
+              };
+            }
+          | null
+      )?.plan;
+      continuity = buildContinuityDirective(parentPlan ?? null);
     }
   }
 
@@ -109,11 +130,13 @@ export async function createVideoJob(
       ? buildVariationPrompt(input.prompt, input.variationIndex)
       : input.prompt;
 
-  // 2. Video Agent — plan + engineer the cinematic prompt. Provider-agnostic;
-  // the router selects the actual provider by capability + health.
+  // 2. Video Agent — plan + engineer the cinematic prompt, weaving in any
+  // creative-continuity from the project. Provider-agnostic; the router selects
+  // the actual provider by capability + health + learned success.
   const { prompt: engineeredPrompt, plan, op } = await planVideoGeneration(
     conceptPrompt,
     mode,
+    { continuity },
   );
 
   // 3. Pricing depends ONLY on quality (provider-independent). Reserve up-front;
@@ -271,6 +294,63 @@ export async function createVideoJob(
   }
 }
 
+/**
+ * Lightweight output validation — beyond "a URL exists". Confirms the rendered
+ * video is actually reachable and looks like a real video payload (not a 404,
+ * an error page, or a suspiciously tiny/empty file). Deliberately conservative:
+ * it only returns FALSE on a DEFINITIVE problem; anything inconclusive (HEAD
+ * blocked, transient network) returns TRUE so a valid video is never rejected.
+ * (Deep frame analysis — black/frozen/motion — needs media decoding and is out
+ * of scope for this stateless check.)
+ */
+async function validateVideoOutput(url: string): Promise<boolean> {
+  try {
+    const res = await axios.head(url, {
+      timeout: 8000,
+      validateStatus: () => true,
+    });
+    if (res.status >= 400) return false; // definitively broken (404/5xx)
+    const len = Number(res.headers['content-length'] ?? '0');
+    const type = String(res.headers['content-type'] ?? '');
+    if (len > 0 && len < 1024) return false; // empty/corrupt clip
+    if (type && !type.startsWith('video/') && type !== 'application/octet-stream') {
+      return false; // not a video payload (e.g. an HTML error page)
+    }
+    return true;
+  } catch {
+    return true; // inconclusive — never reject a possibly-valid video
+  }
+}
+
+/**
+ * Atomically claim a terminal transition for a job. Flips status to `to` ONLY
+ * if the job is still non-terminal (QUEUED/PROCESSING), in a single SQL
+ * statement. Returns true if THIS call won the transition (so it should perform
+ * the one-time side effects: refunds, lip-sync, final write), false if the job
+ * was already finalized by a concurrent webhook / poll / cancel.
+ *
+ * This is the concurrency guard that makes finalization (and therefore every
+ * credit refund) EXACTLY-ONCE under retried webhooks and racing status polls —
+ * replacing the previous read-then-write `creditRefunded` check (a TOCTOU race
+ * that could double-refund or double-run the lip-sync at scale).
+ */
+async function claimTerminalTransition(
+  jobId: string,
+  to: 'COMPLETED' | 'FAILED',
+): Promise<boolean> {
+  const rows = await db
+    .update(videoJobs)
+    .set({ status: to, updatedAt: new Date() })
+    .where(
+      and(
+        eq(videoJobs.id, jobId),
+        inArray(videoJobs.status, ['QUEUED', 'PROCESSING']),
+      ),
+    )
+    .returning({ id: videoJobs.id });
+  return rows.length > 0;
+}
+
 // ─── WEBHOOK (called by AI router on job completion) ──────────
 
 export async function handleJobWebhook(
@@ -320,17 +400,32 @@ export async function handleJobWebhook(
     return;
   }
 
-  // Output validation: a "completed success" with no usable video URL is a
-  // real failure (empty/corrupt output) — fall through to the refund path so
-  // the user is never charged for a non-deliverable result.
-  const hasUsableOutput = !!(result.outputUrl && result.outputUrl.trim());
+  // Output validation: a "completed success" with no usable / unreachable /
+  // corrupt video is a real failure — fall through to the refund path so the
+  // user is never charged for, or shown, a non-deliverable result.
+  const outUrl = result.outputUrl?.trim();
+  let hasUsableOutput = !!outUrl;
+  if (result.routerStatus === 'COMPLETED' && result.success && outUrl) {
+    hasUsableOutput = await validateVideoOutput(outUrl);
+    if (!hasUsableOutput) {
+      logger.warn(
+        `Video job ${jobId}: output failed validation — treating as failure (refund)`,
+      );
+    }
+  }
 
   if (result.routerStatus === 'COMPLETED' && result.success && hasUsableOutput) {
+    // Atomically claim the completion. If a concurrent webhook/poll already
+    // finalized this job, bail out — guarantees the delta refund + lip-sync
+    // (an external, paid call) run EXACTLY ONCE.
+    if (!(await claimTerminalTransition(jobId, 'COMPLETED'))) {
+      logger.info(`Video job ${jobId}: completion already finalized — skipping`);
+      return;
+    }
+
     // The video models only produce fixed clip lengths (Pika 5s, Runway
     // 5s/10s). If the provider generated a shorter clip than the user asked
     // and paid for, correct the stored duration and refund the difference.
-    // Idempotent: once durationSeconds is rewritten to the actual value, a
-    // repeat webhook computes a zero delta and refunds nothing.
     const actual = result.actualDurationSeconds;
     let correctedDuration = job.durationSeconds;
     let correctedCredits = job.creditsCharged;
@@ -458,6 +553,14 @@ export async function handleJobWebhook(
   }
 
   // FAILED or success=false.
+  // Atomically claim the failure transition; if a concurrent call already
+  // finalized the job (completed or failed), bail out so the refund is
+  // EXACTLY-ONCE. Replaces the previous read-then-write creditRefunded check.
+  if (!(await claimTerminalTransition(jobId, 'FAILED'))) {
+    logger.info(`Video job ${jobId}: already finalized — skipping failure refund`);
+    return;
+  }
+
   // Credit-safety invariant: video pricing is provider-agnostic
   // (calculateVideoCredits depends only on duration/resolution/quality), so
   // provider substitution/failover never costs more than was originally
@@ -664,23 +767,19 @@ export async function listUserJobs(
 export async function cancelJob(jobId: string, userId: string): Promise<void> {
   const job = await db.query.videoJobs.findFirst({
     where: and(eq(videoJobs.id, jobId), eq(videoJobs.userId, userId)),
-    columns: { status: true, creditsCharged: true, creditRefunded: true },
+    columns: { status: true },
   });
 
   if (!job) throw new AppError('Job not found', 404);
   if (job.status === 'COMPLETED') throw new AppError('Cannot cancel a completed job', 400);
   if (job.status === 'CANCELLED') throw new AppError('Job already cancelled', 400);
 
-  if (!job.creditRefunded) {
-    await refundCredits({
-      userId,
-      credits: job.creditsCharged,
-      module: 'VIDEO',
-      description: 'Refund: video job cancelled by user',
-    });
-  }
-
-  await db
+  // Atomically claim the cancellation + refund in one statement: flip to
+  // CANCELLED only if still non-terminal AND not already refunded. This wins-or-
+  // loses cleanly against a webhook that may be finalizing the same job, so the
+  // refund happens at most once (never double-refunds; never refunds a job that
+  // completed in the meantime).
+  const [claimed] = await db
     .update(videoJobs)
     .set({
       status: 'CANCELLED',
@@ -688,7 +787,27 @@ export async function cancelJob(jobId: string, userId: string): Promise<void> {
       completedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(videoJobs.id, jobId));
+    .where(
+      and(
+        eq(videoJobs.id, jobId),
+        inArray(videoJobs.status, ['QUEUED', 'PROCESSING']),
+        eq(videoJobs.creditRefunded, false),
+      ),
+    )
+    .returning({ creditsCharged: videoJobs.creditsCharged });
+
+  if (!claimed) {
+    // A concurrent webhook finalized it first — nothing to refund here.
+    logger.info(`Video job ${jobId}: cancel lost the race (already finalized)`);
+    return;
+  }
+
+  await refundCredits({
+    userId,
+    credits: claimed.creditsCharged,
+    module: 'VIDEO',
+    description: 'Refund: video job cancelled by user',
+  });
 
   await emit({
     jobId,

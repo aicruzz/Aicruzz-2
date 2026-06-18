@@ -50,28 +50,38 @@ export async function handleWebhook(req: Request, res: Response): Promise<void> 
   const { jobId } = req.params;
   const body = req.body as WebhookBody | ProgressEventBody;
 
-  // Respond immediately so the caller doesn't time out on our DB write/publish
+  // Respond immediately so the caller doesn't time out on our DB write/publish.
   res.json({ received: true });
 
-  // Worker progress events are fire-and-forget broadcast only — no DB status
-  // change beyond a lazy QUEUED → PROCESSING flip.
-  if ((body as ProgressEventBody).type === 'progress') {
-    const ev = body as ProgressEventBody;
-    await videoService.handleProgressEvent(jobId, ev.stage, ev.progress, ev.message);
-    return;
-  }
+  // The response is already sent, so any error in the async processing below
+  // MUST be caught here — otherwise it becomes an unhandled promise rejection
+  // (which can crash the process under strict Node settings).
+  try {
+    // Worker progress events are fire-and-forget broadcast only — no DB status
+    // change beyond a lazy QUEUED → PROCESSING flip.
+    if ((body as ProgressEventBody).type === 'progress') {
+      const ev = body as ProgressEventBody;
+      await videoService.handleProgressEvent(jobId, ev.stage, ev.progress, ev.message);
+      return;
+    }
 
-  const wb = body as WebhookBody;
-  await videoService.handleJobWebhook(jobId, {
-    success:      wb.success,
-    routerStatus: wb.result.raw.status,
-    outputUrl:    wb.result.raw.output_url,
-    thumbnailUrl: wb.result.raw.thumbnail_url,
-    provider:     wb.result.provider,
-    actualDurationSeconds: wb.result.raw.duration_seconds,
-    error:        wb.result.raw.error,
-    diagnostics:  wb.diagnostics ?? null,
-  });
+    const wb = body as WebhookBody;
+    await videoService.handleJobWebhook(jobId, {
+      success:      wb.success,
+      routerStatus: wb.result.raw.status,
+      outputUrl:    wb.result.raw.output_url,
+      thumbnailUrl: wb.result.raw.thumbnail_url,
+      provider:     wb.result.provider,
+      actualDurationSeconds: wb.result.raw.duration_seconds,
+      error:        wb.result.raw.error,
+      diagnostics:  wb.diagnostics ?? null,
+    });
+  } catch (err) {
+    logger.error('Video webhook processing failed', {
+      jobId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 // ─── SERVER-SENT EVENTS ───────────────────────────────────────────

@@ -3,6 +3,7 @@ import { HealthMonitor } from '../health/health.monitor';
 import { resolveVideoQuality } from './quality-router';
 import { reorderByCapability } from './provider-capability';
 import type { SubstitutionReason } from './provider-capability';
+import { videoProviderScore } from './video-learning';
 import type {
   RouteRequest,
   ProviderId,
@@ -249,17 +250,23 @@ export class ProviderSelector {
     };
   }
 
-  // Stable health sort: higher health first, ties keep the input order. Demotes
-  // DEGRADED/OFFLINE / high-error / slow providers so the healthiest goes first.
+  // Stable health + learning sort for VIDEO: higher combined score first, ties
+  // keep the input order. Blends LIVE health (status/error/latency) with the
+  // LEARNED success score (accumulated real outcomes) so ranking self-improves
+  // with no hardcoded priorities — and a healthy/historically-reliable provider
+  // goes first. Never drops providers (fallback still tries them all).
   private healthReorder(chain: BaseProvider[]): BaseProvider[] {
     const score = (id: ProviderId): number => {
       const h = this.health.getHealth(id);
       const statusScore =
         h.status === 'ONLINE' ? 1 : h.status === 'DEGRADED' ? 0.5 : 0.1;
-      return Math.max(
+      const healthScore = Math.max(
         0,
         statusScore - h.errorRate - Math.min(h.latencyMs / 10_000, 0.3),
       );
+      const learnedScore = videoProviderScore(id);
+      // Health guards immediate availability; learning rewards reliability.
+      return healthScore * 0.5 + learnedScore * 0.5;
     };
     return chain
       .map((p, i) => ({ p, i, s: score(p.id) }))

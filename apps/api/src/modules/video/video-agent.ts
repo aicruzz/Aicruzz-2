@@ -23,11 +23,35 @@ export type VideoCategory =
   | "NATURE"
   | "CHARACTER"
   | "ABSTRACT"
+  // ── Professional creative presets (auto-inferred by the planner) ──
+  | "LUXURY_COMMERCIAL"
+  | "PRODUCT_LAUNCH"
+  | "RESTAURANT_AD"
+  | "REAL_ESTATE"
+  | "CORPORATE"
+  | "TRAVEL"
+  | "FASHION"
+  | "AUTOMOTIVE"
+  | "HEALTHCARE"
+  | "EDUCATION"
+  | "SOCIAL_MEDIA"
+  | "DOCUMENTARY"
+  | "HOLLYWOOD_TRAILER"
+  | "ANIME"
+  | "PIXAR"
+  | "GHIBLI"
+  | "CYBERPUNK"
+  | "MINIMALIST"
   | "GENERIC";
 
 const CATEGORIES: VideoCategory[] = [
   "CINEMATIC", "PRODUCT", "ANIMATION", "EXPLAINER", "MOTION_GRAPHICS",
-  "REALISTIC", "NATURE", "CHARACTER", "ABSTRACT", "GENERIC",
+  "REALISTIC", "NATURE", "CHARACTER", "ABSTRACT",
+  "LUXURY_COMMERCIAL", "PRODUCT_LAUNCH", "RESTAURANT_AD", "REAL_ESTATE",
+  "CORPORATE", "TRAVEL", "FASHION", "AUTOMOTIVE", "HEALTHCARE", "EDUCATION",
+  "SOCIAL_MEDIA", "DOCUMENTARY", "HOLLYWOOD_TRAILER", "ANIME", "PIXAR",
+  "GHIBLI", "CYBERPUNK", "MINIMALIST",
+  "GENERIC",
 ];
 
 // Internal plan — never returned to the user.
@@ -100,6 +124,66 @@ const CATEGORY_DIRECTIVES: Record<VideoCategory, string> = {
   ABSTRACT:
     "Abstract motion: cohesive forms and palette, fluid evolving movement and " +
     "intentional composition.",
+  LUXURY_COMMERCIAL:
+    "Luxury commercial: elegant slow camera moves, premium materials, dramatic " +
+    "rim/edge lighting, rich contrast, refined color grade and an aspirational, " +
+    "high-end mood with immaculate detail.",
+  PRODUCT_LAUNCH:
+    "Product launch film: hero product reveal, confident push-in/orbit, crisp " +
+    "studio lighting, accurate materials and reflections, sharp focus and a " +
+    "clean, modern, premium presentation.",
+  RESTAURANT_AD:
+    "Restaurant/food advertisement: appetising close-ups, warm inviting light, " +
+    "fresh textures, gentle steam/sizzle motion, shallow depth of field and a " +
+    "tasteful, mouth-watering mood.",
+  REAL_ESTATE:
+    "Real-estate showcase: smooth gliding/drone-style moves, bright natural " +
+    "interior light, correct architectural perspective, spacious framing and a " +
+    "clean, premium property feel.",
+  CORPORATE:
+    "Corporate brand film: polished, professional, confident pacing, clean " +
+    "modern lighting, trustworthy tone and tasteful, restrained motion.",
+  TRAVEL:
+    "Travel film: sweeping establishing shots, golden-hour light, vivid yet " +
+    "natural color, atmospheric depth and a sense of adventure and place.",
+  FASHION:
+    "Fashion film: editorial styling, flattering directional light, elegant " +
+    "movement, accurate fabric drape and a bold, stylish, high-end mood.",
+  AUTOMOTIVE:
+    "Automotive film: dynamic tracking and orbit moves, dramatic reflections " +
+    "on paint and glass, accurate proportions and wheels, powerful pacing and " +
+    "a premium, cinematic finish.",
+  HEALTHCARE:
+    "Healthcare/medical: clean, calm, reassuring tone, soft natural light, " +
+    "accurate and respectful representation and gentle, steady motion.",
+  EDUCATION:
+    "Educational: clear, friendly, well-lit and uncluttered, calm purposeful " +
+    "motion that supports understanding. Only include text if explicitly asked.",
+  SOCIAL_MEDIA:
+    "Social-media short: punchy, attention-grabbing opening, vibrant color, " +
+    "energetic but smooth motion and a bold, modern, scroll-stopping feel.",
+  DOCUMENTARY:
+    "Documentary: authentic, natural light, observational handheld or steady " +
+    "framing, real textures and an honest, grounded tone.",
+  HOLLYWOOD_TRAILER:
+    "Hollywood trailer: epic scale, dramatic high-contrast lighting, bold " +
+    "cinematic color grade, sweeping camera and intense, climactic energy.",
+  ANIME:
+    "Anime style: clean line art, cel shading, expressive features and color " +
+    "harmony consistent with anime, with coherent anatomy and smooth motion.",
+  PIXAR:
+    "Pixar-style 3D animation: appealing stylized characters, soft global " +
+    "illumination, warm inviting color, polished materials and expressive, " +
+    "bouncy yet believable motion.",
+  GHIBLI:
+    "Studio-Ghibli-style: hand-painted look, soft natural palettes, gentle " +
+    "atmospheric light, lush backgrounds and warm, whimsical, heartfelt mood.",
+  CYBERPUNK:
+    "Cyberpunk: neon-lit night, rain-slick reflections, high contrast, moody " +
+    "teal-and-magenta palette, holographic accents and a gritty futuristic feel.",
+  MINIMALIST:
+    "Minimalist: clean negative space, restrained palette, simple precise " +
+    "composition and calm, deliberate, understated motion.",
   GENERIC: "",
 };
 
@@ -111,15 +195,33 @@ function loaderOpForCategory(category: VideoCategory, mode: VideoMode): VideoOp 
     case "REALISTIC":
     case "NATURE":
     case "CHARACTER":
+    case "LUXURY_COMMERCIAL":
+    case "REAL_ESTATE":
+    case "CORPORATE":
+    case "TRAVEL":
+    case "FASHION":
+    case "AUTOMOTIVE":
+    case "HEALTHCARE":
+    case "DOCUMENTARY":
+    case "HOLLYWOOD_TRAILER":
+    case "CYBERPUNK":
       return "cinematic";
     case "PRODUCT":
+    case "PRODUCT_LAUNCH":
+    case "RESTAURANT_AD":
       return "product";
     case "ANIMATION":
+    case "ANIME":
+    case "PIXAR":
+    case "GHIBLI":
       return "animation";
     case "EXPLAINER":
+    case "EDUCATION":
       return "explainer";
     case "MOTION_GRAPHICS":
     case "ABSTRACT":
+    case "SOCIAL_MEDIA":
+    case "MINIMALIST":
       return "motion_graphics";
     default:
       return "generate";
@@ -147,12 +249,15 @@ const PLAN_SYSTEM =
   '{"category","subject","environment","camera","lighting","motion","style",' +
   '"mood","palette","prompt"}. "category" must be one of: ' +
   CATEGORIES.join(", ") +
-  '. "camera" captures movement + angle + lens; "motion" describes how things ' +
-  'move. "prompt" is ONE production-quality, single-paragraph video prompt ' +
-  "that preserves the user's exact intent and every stated detail. You may add " +
-  "concrete cinematic specificity that is clearly implied, but DO NOT invent " +
-  "new subjects, people, text, logos, objects or scenery the user did not " +
-  "request. No markdown, no commentary — JSON only.";
+  '. Pick the MOST specific category that fits (e.g. a car ad → AUTOMOTIVE, a ' +
+  'food spot → RESTAURANT_AD, a neon night scene → CYBERPUNK, a hand-painted ' +
+  'whimsical look → GHIBLI) — only fall back to a broad one when nothing more ' +
+  'specific applies. "camera" captures movement + angle + lens; "motion" ' +
+  'describes how things move. "prompt" is ONE production-quality, single-' +
+  "paragraph video prompt that preserves the user's exact intent and every " +
+  "stated detail. You may add concrete cinematic specificity that is clearly " +
+  "implied, but DO NOT invent new subjects, people, text, logos, objects or " +
+  "scenery the user did not request. No markdown, no commentary — JSON only.";
 
 /**
  * PLAN + CONSTRUCT for a video request. Returns the final provider prompt
@@ -162,6 +267,7 @@ const PLAN_SYSTEM =
 export async function planVideoGeneration(
   userPrompt: string,
   mode: VideoMode = "TEXT_TO_VIDEO",
+  opts: { continuity?: string } = {},
 ): Promise<{ prompt: string; plan: VideoPlan; op: VideoOp }> {
   const base = (userPrompt ?? "").trim();
   const fallback: VideoPlan = {
@@ -226,7 +332,10 @@ export async function planVideoGeneration(
   );
 
   const directives = CATEGORY_DIRECTIVES[plan.category];
-  const finalPrompt = [engineered, directives, VIDEO_FIDELITY_DIRECTIVES]
+  // Creative-continuity directive (project memory) — woven in so related shots
+  // keep the established look unless the user explicitly changes it.
+  const continuity = (opts.continuity ?? "").trim();
+  const finalPrompt = [engineered, continuity, directives, VIDEO_FIDELITY_DIRECTIVES]
     .filter(Boolean)
     .join("\n\n");
 
@@ -237,6 +346,34 @@ export async function planVideoGeneration(
   });
 
   return { prompt: finalPrompt, plan, op: loaderOpForCategory(plan.category, mode) };
+}
+
+// ─── CREATIVE PROJECT MEMORY ──────────────────────────────────
+// Build a continuity directive from a previous shot's plan so the next shot in
+// the same project keeps the established look (style/palette/lighting/camera/
+// mood) — unless the new instruction explicitly changes it. Never throws.
+export function buildContinuityDirective(
+  profile:
+    | Partial<
+        Pick<VideoPlan, "style" | "mood" | "palette" | "camera" | "lighting">
+      >
+    | null
+    | undefined,
+): string {
+  if (!profile) return "";
+  const parts: string[] = [];
+  if (profile.style) parts.push(`visual style "${profile.style}"`);
+  if (profile.palette) parts.push(`color palette "${profile.palette}"`);
+  if (profile.lighting) parts.push(`lighting "${profile.lighting}"`);
+  if (profile.camera) parts.push(`camera language "${profile.camera}"`);
+  if (profile.mood) parts.push(`mood "${profile.mood}"`);
+  if (!parts.length) return "";
+  return (
+    "Maintain creative continuity with the ongoing project: keep the same " +
+    parts.join(", ") +
+    " unless the instruction above explicitly changes them, so this shot feels " +
+    "like part of the same series."
+  );
 }
 
 // ─── INTENTIONAL VARIATIONS (A–E) ─────────────────────────────

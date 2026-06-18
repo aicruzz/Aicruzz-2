@@ -18,6 +18,8 @@ export interface ContinuationSource {
   inputImageUrl: string | null;
   prompt: string | null;
   revisedPrompt: string | null;
+  // Agent metadata — carries the plan used for creative-continuity memory.
+  agentMeta: unknown;
 }
 
 /** Latest COMPLETED video for a user — the conversation's current project. */
@@ -34,6 +36,7 @@ export async function resolveLatestVideo(
       inputImageUrl: true,
       prompt: true,
       revisedPrompt: true,
+      agentMeta: true,
     },
   });
   return (job as ContinuationSource) ?? null;
@@ -53,6 +56,7 @@ export async function getJobForContinuation(
       inputImageUrl: true,
       prompt: true,
       revisedPrompt: true,
+      agentMeta: true,
     },
   });
   return (job as ContinuationSource) ?? null;

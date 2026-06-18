@@ -115,6 +115,24 @@ interface VideoJob {
 // Professional, provider-agnostic stage labels (no provider names anywhere).
 const STEPS = ["Understanding", "Generating motion", "Rendering", "Finalizing"];
 
+// Professional status copy driven by the REAL worker stage (provider-agnostic).
+// Used as an intelligent fallback when the worker sends no message of its own.
+const STAGE_MESSAGES: Record<string, string> = {
+  queued: "Understanding your concept…",
+  generating: "Generating motion…",
+  "post-processing": "Applying cinematic enhancements…",
+  encoding: "Rendering cinematic frames…",
+  completed: "Finalizing your video…",
+};
+
+function professionalStageMessage(e?: VideoEvent | null): string {
+  if (!e) return "Preparing your video…";
+  if (e.status === "QUEUED") return STAGE_MESSAGES.queued;
+  if (e.status === "PROCESSING" && !e.stage)
+    return STAGE_MESSAGES.generating;
+  return (e.stage && STAGE_MESSAGES[e.stage]) || "Optimizing quality…";
+}
+
 function stageIndex(e?: VideoEvent | null): number {
   if (!e) return 0;
   if (e.status === "COMPLETED") return 3;
@@ -689,8 +707,10 @@ export function VideoStudio() {
                   />
                 </div>
               )}
-              {live?.message && !failed && (
-                <p className="text-xs text-gray-500">{live.message}</p>
+              {!failed && !done && (
+                <p className="text-xs text-gray-500">
+                  {live?.message || professionalStageMessage(live)}
+                </p>
               )}
               {failed && (
                 <div className="space-y-3">
