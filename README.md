@@ -105,6 +105,7 @@ cd ~/worker
 pm2 restart gpu-api
 pm2 logs gpu-api
 
+
 2349061484957
 
 ```bash
