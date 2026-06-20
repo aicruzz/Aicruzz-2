@@ -2,6 +2,7 @@
 export type AiModule =
   | 'CHAT'
   | 'VIDEO'
+  | 'VIDEO_FACE_SWAP'
   | 'IMAGE'
   | 'IMAGE_TRANSFORM'
   | 'VOICE'
@@ -16,7 +17,10 @@ export type ProviderId =
   | 'ANTHROPIC'
   | 'ELEVENLABS'
   | 'RUNWAY'
-  | 'PIKA';
+  | 'PIKA'
+  // Identity-preserving video face/head swap (env-gated; future: 'D_ID').
+  | 'HEYGEN'
+  | 'TAVUS';
 
 // ─── Quality / priority mode ──────────────────────────────────
 export type RoutingStrategy = 'COST' | 'SPEED' | 'QUALITY' | 'AUTO';
@@ -82,6 +86,8 @@ export interface RouteRequest {
   // an image array). Additive — when absent, inputImageUrl is used as before.
   inputImageUrls?: string[];
   inputVideoUrl?: string;
+  // Face/head to insert for VIDEO_FACE_SWAP (target identity image).
+  targetImageUrl?: string;
   width?: number;
   height?: number;
   durationSeconds?: number;

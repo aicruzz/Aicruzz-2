@@ -46,6 +46,10 @@ const WEBRTC_HTTP_URL = WS_URL.replace(/^ws(s?):/, "http$1:");
 const CREDITS_PER_SECOND = 0.2;
 const HANDSHAKE_TIMEOUT_MS = 8000;
 const MAX_RECONNECT_ATTEMPTS = 6;
+// Transient ICE 'disconnected' usually self-heals within a couple of seconds.
+// Wait this long before ever surfacing "Reconnecting…" so a momentary blip
+// recovers silently (only genuine, sustained failures show the banner).
+const DISCONNECT_GRACE_MS = 5000;
 const STALL_THRESHOLD_MS = 6000;
 
 type WsMessage = { type: string; data?: unknown };
@@ -103,6 +107,9 @@ export default function LiveCamPage() {
   const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectingRef = useRef(false);
+  // Pending grace timer for a transient transport 'disconnected' (silent
+  // recovery window). Non-null = waiting to see if ICE self-heals.
+  const disconnectGraceRef = useRef<NodeJS.Timeout | null>(null);
   const intentionalCloseRef = useRef(false);
   // Guard against a fast double-click / double-mount creating two
   // /live-cam/start sessions (double billing) or two WebSockets.
@@ -445,14 +452,53 @@ export default function LiveCamPage() {
     );
 
     sendTransport.on("connectionstatechange", (state) => {
-      if (state === "failed" || state === "disconnected") {
-        if (isLiveRef.current && !intentionalCloseRef.current) {
-          if (!reconnectingRef.current) {
+      if (!isLiveRef.current || intentionalCloseRef.current) return;
+
+      const clearGrace = () => {
+        if (disconnectGraceRef.current) {
+          clearTimeout(disconnectGraceRef.current);
+          disconnectGraceRef.current = null;
+        }
+      };
+
+      // Healthy again → cancel any pending grace timer and stay SILENT.
+      if (state === "connected") {
+        clearGrace();
+        return;
+      }
+
+      // Genuine, terminal media failure → reconnect immediately.
+      if (state === "failed") {
+        clearGrace();
+        if (!reconnectingRef.current) {
+          reconnectingRef.current = true;
+          setConnState("reconnecting");
+          scheduleReconnect();
+        }
+        return;
+      }
+
+      // 'disconnected' is a NORMAL transient ICE state that usually self-heals.
+      // Do NOT show "reconnecting" yet — start a grace window; only escalate if
+      // it is still down by then (the 'connected' branch clears this timer).
+      if (state === "disconnected") {
+        if (reconnectingRef.current || disconnectGraceRef.current) return;
+        disconnectGraceRef.current = setTimeout(() => {
+          disconnectGraceRef.current = null;
+          const st = sendTransport.connectionState;
+          const stillDown =
+            st === "disconnected" || st === "failed" || st === "closed";
+          if (
+            stillDown &&
+            isLiveRef.current &&
+            !intentionalCloseRef.current &&
+            !reconnectingRef.current
+          ) {
             reconnectingRef.current = true;
             setConnState("reconnecting");
             scheduleReconnect();
           }
-        }
+        }, DISCONNECT_GRACE_MS);
       }
     });
 
@@ -572,6 +618,8 @@ export default function LiveCamPage() {
     if (creditTickRef.current) clearInterval(creditTickRef.current);
     if (handshakeTimerRef.current) clearTimeout(handshakeTimerRef.current);
     if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    if (disconnectGraceRef.current) clearTimeout(disconnectGraceRef.current);
+    disconnectGraceRef.current = null;
     if (stallTimerRef.current) clearInterval(stallTimerRef.current);
 
     // Tear down the avatar pipeline (cancels rVFC, aborts fetches, stops

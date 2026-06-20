@@ -63,43 +63,32 @@ export async function startSession(userId: string) {
 export async function billingTick(input: BillingTickInput): Promise<BillingTickResponse> {
   const { sessionId, userId, credits } = input;
 
+  // A transient DB error (e.g. Neon cold-start/latency) on a 1-second billing
+  // tick must NEVER read as "session dead" — that would tear down a healthy
+  // live session. Only InsufficientCreditsError genuinely ends a session; any
+  // other error skips this single tick (no charge) and keeps the session alive.
+  const SKIP_TICK: BillingTickResponse = {
+    sufficient: true,
+    creditsRemaining: -1,
+    creditsDeducted: 0,
+    sessionActive: true,
+    duplicate: true,
+  };
+
   const result = await withSessionLock(sessionId, async () => {
-    // Verify session exists and is active. Re-read inside the lock so we don't
-    // race a concurrent endSession.
-    const session = await db.query.liveCamSessions.findFirst({
-      where: and(
-        eq(liveCamSessions.id, sessionId),
-        eq(liveCamSessions.userId, userId),
-        eq(liveCamSessions.status, 'ACTIVE'),
-      ),
-      columns: { id: true },
-    });
-
-    if (!session) {
-      return {
-        sufficient: false,
-        creditsRemaining: 0,
-        creditsDeducted: 0,
-        sessionActive: false,
-      } as BillingTickResponse;
-    }
-
     try {
-      await deductCredits({
-        userId,
-        credits,
-        module: 'LIVE_CAM',
-        description: `Live Cam: 1 second`,
-        metadata: { sessionId },
+      // Verify session exists and is active. Re-read inside the lock so we don't
+      // race a concurrent endSession.
+      const session = await db.query.liveCamSessions.findFirst({
+        where: and(
+          eq(liveCamSessions.id, sessionId),
+          eq(liveCamSessions.userId, userId),
+          eq(liveCamSessions.status, 'ACTIVE'),
+        ),
+        columns: { id: true },
       });
-    } catch (err) {
-      if (err instanceof InsufficientCreditsError) {
-        await db
-          .update(liveCamSessions)
-          .set({ status: 'INTERRUPTED', endedAt: new Date(), updatedAt: new Date() })
-          .where(
-            and(eq(liveCamSessions.id, sessionId), ne(liveCamSessions.status, 'ENDED')),
-          );
+
+      if (!session) {
         return {
           sufficient: false,
           creditsRemaining: 0,
@@ -107,29 +96,65 @@ export async function billingTick(input: BillingTickInput): Promise<BillingTickR
           sessionActive: false,
         } as BillingTickResponse;
       }
-      throw err;
+
+      try {
+        await deductCredits({
+          userId,
+          credits,
+          module: 'LIVE_CAM',
+          description: `Live Cam: 1 second`,
+          metadata: { sessionId },
+        });
+      } catch (err) {
+        if (err instanceof InsufficientCreditsError) {
+          await db
+            .update(liveCamSessions)
+            .set({ status: 'INTERRUPTED', endedAt: new Date(), updatedAt: new Date() })
+            .where(
+              and(eq(liveCamSessions.id, sessionId), ne(liveCamSessions.status, 'ENDED')),
+            );
+          return {
+            sufficient: false,
+            creditsRemaining: 0,
+            creditsDeducted: 0,
+            sessionActive: false,
+          } as BillingTickResponse;
+        }
+        // Transient deduct error → skip this tick, keep the session alive.
+        logger.warn(`billingTick: transient deduct error for ${sessionId}; skipping tick`, {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return SKIP_TICK;
+      }
+
+      await db
+        .update(liveCamSessions)
+        .set({
+          totalSeconds: sql`${liveCamSessions.totalSeconds} + 1`,
+          totalCredits: sql`${liveCamSessions.totalCredits} + ${credits}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(liveCamSessions.id, sessionId));
+
+      const wallet = await db.query.wallets.findFirst({
+        where: eq(wallets.userId, userId),
+        columns: { credits: true },
+      });
+
+      return {
+        sufficient: true,
+        creditsRemaining: wallet?.credits ?? 0,
+        creditsDeducted: credits,
+        sessionActive: true,
+      } as BillingTickResponse;
+    } catch (err) {
+      // Transient DB error on read/update (Neon latency) → skip this tick;
+      // never tear down a live session for a momentary database blip.
+      logger.warn(`billingTick: transient DB error for ${sessionId}; skipping tick`, {
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return SKIP_TICK;
     }
-
-    await db
-      .update(liveCamSessions)
-      .set({
-        totalSeconds: sql`${liveCamSessions.totalSeconds} + 1`,
-        totalCredits: sql`${liveCamSessions.totalCredits} + ${credits}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(liveCamSessions.id, sessionId));
-
-    const wallet = await db.query.wallets.findFirst({
-      where: eq(wallets.userId, userId),
-      columns: { credits: true },
-    });
-
-    return {
-      sufficient: true,
-      creditsRemaining: wallet?.credits ?? 0,
-      creditsDeducted: credits,
-      sessionActive: true,
-    } as BillingTickResponse;
   });
 
   // Lock contended — another tick is already mid-flight for this session.

@@ -18,6 +18,8 @@ import { ElevenLabsProvider } from './providers/elevenlabs.provider';
 import { RunwayProvider } from './providers/runway.provider';
 import { PikaProvider } from './providers/pika.provider';
 import { GpuProvider } from './providers/gpu.provider';
+import { HeyGenProvider } from './providers/heygen.provider';
+import { TavusProvider } from './providers/tavus.provider';
 
 import type { ProviderId, RouteRequest } from './types';
 import { redactJobStatusHttpPayload, redactRouteResponseForClient } from './utils/public-response';
@@ -36,6 +38,8 @@ async function bootstrap() {
     new RunwayProvider(),
     new PikaProvider(),
     new GpuProvider(),
+    new HeyGenProvider(),
+    new TavusProvider(),
   ];
 
   const providers = new Map<ProviderId, BaseProvider>();

@@ -1,5 +1,54 @@
 import { body, param, query } from 'express-validator';
 
+// Video Changer (face swap): requires a target identity image + a source video.
+// No text prompt (the providers swap the face into the source video). Voice +
+// quality + duration mirror the generation validator.
+export const createFaceSwapValidator = [
+  body('targetImageUrl')
+    .isString()
+    .trim()
+    .notEmpty()
+    .withMessage('A target face/head image is required')
+    .isURL()
+    .withMessage('targetImageUrl must be a valid URL'),
+
+  body('inputVideoUrl')
+    .isString()
+    .trim()
+    .notEmpty()
+    .withMessage('A source video is required')
+    .isURL()
+    .withMessage('inputVideoUrl must be a valid URL'),
+
+  body('durationSeconds')
+    .isInt()
+    .bail()
+    .custom((v) => [5, 10].includes(Number(v)))
+    .withMessage('Duration must be 5 or 10 seconds'),
+
+  body('resolution')
+    .isIn(['SD_480P', 'HD_720P', 'FHD_1080P'])
+    .withMessage('Resolution must be SD_480P, HD_720P, or FHD_1080P'),
+
+  body('qualityMode')
+    .isIn(['STANDARD', 'HIGH', 'ULTRA'])
+    .withMessage('Quality must be STANDARD, HIGH, or ULTRA'),
+
+  body('voiceEnabled').isBoolean().withMessage('voiceEnabled must be boolean'),
+
+  body('voiceText')
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: 2000 })
+    .withMessage('Voice text max 2,000 characters'),
+
+  body('voiceGender')
+    .optional()
+    .isIn(['MALE', 'FEMALE'])
+    .withMessage('voiceGender must be MALE or FEMALE'),
+];
+
 export const createVideoJobValidator = [
   body('prompt')
     .isString()

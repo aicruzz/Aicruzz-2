@@ -53,6 +53,25 @@ export const VIDEO_PROVIDER_CAPABILITIES: Partial<
     animation: true,
     available: true,
   },
+  // Identity-preserving video face/head swap (VIDEO_FACE_SWAP module). Runtime
+  // enablement is gated by the provider's own config.enabled (env API key);
+  // `available` here just declares the capability exists.
+  HEYGEN: {
+    ...NONE,
+    video2video: true,
+    characterAnimation: true,
+    lipSync: true,
+    highRealism: true,
+    available: true,
+  },
+  TAVUS: {
+    ...NONE,
+    video2video: true,
+    characterAnimation: true,
+    lipSync: true,
+    highRealism: true,
+    available: true,
+  },
   // ── Future providers (declared, not yet executable) ──────────
   // Flip `available` + add a provider implementation to enable. When a provider
   // declares video2video/continuation, frame-based Continue Editing upgrades to

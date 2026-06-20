@@ -7,6 +7,7 @@ import { AppError } from '../middleware/error.middleware';
 export type AiModule =
   | 'CHAT'
   | 'VIDEO'
+  | 'VIDEO_FACE_SWAP'
   | 'IMAGE'
   | 'IMAGE_TRANSFORM'
   | 'VOICE'
@@ -37,6 +38,8 @@ export interface RouteRequest {
   // an image array). Additive — when absent, inputImageUrl is used as before.
   inputImageUrls?: string[];
   inputVideoUrl?: string;
+  // Target face/head image for VIDEO_FACE_SWAP.
+  targetImageUrl?: string;
   width?: number;
   height?: number;
   durationSeconds?: number;

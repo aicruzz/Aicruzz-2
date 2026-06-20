@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { and, asc, desc, eq, max, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, max, or, sql } from 'drizzle-orm';
 import { db } from '../../config/database';
 import {
   cartoonTemplates,
@@ -486,7 +486,26 @@ export async function handleWebhook(jobId: string, payload: WebhookPayload) {
   });
   if (!job) return;
 
+  // Atomically claim the terminal transition so concurrent webhook + status-poll
+  // calls (and provider webhook retries) finalize EXACTLY ONCE — preventing
+  // double-refund and double lip-sync. Mirrors video.service.claimTerminalTransition.
+  async function claimTerminal(to: 'COMPLETED' | 'FAILED'): Promise<boolean> {
+    const rows = await db
+      .update(cartoonJobs)
+      .set({ status: to, updatedAt: new Date() })
+      .where(
+        and(
+          eq(cartoonJobs.id, jobId),
+          inArray(cartoonJobs.status, ['QUEUED', 'PROCESSING']),
+        ),
+      )
+      .returning({ id: cartoonJobs.id });
+    return rows.length > 0;
+  }
+
   if (payload.routerStatus === 'COMPLETED') {
+    if (!(await claimTerminal('COMPLETED'))) return; // already finalized
+
     // Mirror the Video Studio refund logic: if the provider generated a
     // shorter clip than the user requested and paid for, refund the delta.
     // Idempotent: once durationSecs is rewritten to the actual value a
@@ -574,6 +593,7 @@ export async function handleWebhook(jobId: string, payload: WebhookPayload) {
       }
     }
   } else if (payload.routerStatus === 'FAILED') {
+    if (!(await claimTerminal('FAILED'))) return; // already finalized
     // Credit-safety invariant: cartoon pricing is provider-agnostic, so
     // provider substitution/failover never costs more than was originally
     // charged — the only credit movement here is a refund. We never charge

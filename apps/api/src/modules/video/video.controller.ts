@@ -13,6 +13,16 @@ export async function createVideoJob(req: Request, res: Response): Promise<void>
   sendCreated(res, job, 'Video generation job queued');
 }
 
+// POST /api/video/face-swap — Video Changer. Reuses the entire video pipeline
+// (queue/billing/webhook/events/history/narration); only the jobType differs.
+export async function createFaceSwapJob(req: Request, res: Response): Promise<void> {
+  const job = await videoService.createVideoJob(req.user!.userId, {
+    ...req.body,
+    jobType: 'FACE_SWAP',
+  });
+  sendCreated(res, job, 'Video face-swap job queued');
+}
+
 export async function listJobs(req: Request, res: Response): Promise<void> {
   const page  = parseInt(req.query.page  as string) || 1;
   const limit = parseInt(req.query.limit as string) || 20;

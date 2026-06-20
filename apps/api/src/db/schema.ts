@@ -458,6 +458,10 @@ export const videoJobs = pgTable(
     parentJobId: text('parent_job_id'),            // continuation / variation source
     variationIndex: integer('variation_index'),    // A/B/C/D/E variation
     agentMeta: jsonb('agent_meta').$type<VideoAgentMeta>(), // plan + execution ledger
+    // Video Changer (face swap): job kind + target identity image. Defaults to
+    // 'GENERATE' so existing rows + the Video Studio path are unchanged.
+    jobType: text('job_type').default('GENERATE').notNull(), // 'GENERATE' | 'FACE_SWAP'
+    targetImageUrl: text('target_image_url'),       // face/head to insert
     queueJobId: text('queue_job_id'),
     startedAt: timestamp('started_at'),
     completedAt: timestamp('completed_at'),

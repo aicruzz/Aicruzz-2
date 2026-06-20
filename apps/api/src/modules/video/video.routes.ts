@@ -8,7 +8,11 @@ import {
   uploadBufferToCloudinary,
   isCloudinaryConfigured,
 } from '../../config/cloudinary';
-import { createVideoJobValidator, listJobsValidator } from './video.validators';
+import {
+  createVideoJobValidator,
+  createFaceSwapValidator,
+  listJobsValidator,
+} from './video.validators';
 import { videoGenerateRateLimiter } from '../../middleware/rateLimit.middleware';
 import { logger } from '../../utils/logger';
 import * as videoController from './video.controller';
@@ -64,6 +68,16 @@ router.post(
   createVideoJobValidator,
   validate,
   videoController.createVideoJob,
+);
+
+// POST /api/video/face-swap — Video Changer (target image + source video).
+// Same per-user rate limit + shared pipeline as /generate.
+router.post(
+  '/face-swap',
+  videoGenerateRateLimiter,
+  createFaceSwapValidator,
+  validate,
+  videoController.createFaceSwapJob,
 );
 
 // POST /api/video/upload-input — upload reference image or video

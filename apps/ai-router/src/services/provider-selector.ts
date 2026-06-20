@@ -65,6 +65,15 @@ const MODULE_ROUTES: Record<AiModule, Record<RouteRequest['strategy'], ProviderI
     QUALITY: ['RUNWAY', 'PIKA'],
     AUTO:    ['PIKA', 'RUNWAY'],
   },
+  // Identity-preserving video face/head swap. HeyGen primary, Tavus fallback;
+  // both env-gated (a disabled provider is simply skipped). Future providers
+  // (e.g. D-ID) join by adding their id here + a provider file.
+  VIDEO_FACE_SWAP: {
+    COST:    ['HEYGEN', 'TAVUS'],
+    SPEED:   ['HEYGEN', 'TAVUS'],
+    QUALITY: ['HEYGEN', 'TAVUS'],
+    AUTO:    ['HEYGEN', 'TAVUS'],
+  },
   IMAGE: {
     COST:    ['OPENAI'],
     SPEED:   ['OPENAI'],
@@ -226,11 +235,15 @@ export class ProviderSelector {
     const reorder = reorderByCapability(chain, request);
     chain = reorder.chain;
 
-    // Layer 2 (VIDEO only) — health-aware reorder. Keeps every provider in the
-    // chain (so fallback can still try them all → a video fails only when ALL
-    // providers fail), but puts the healthiest capable provider first so the
-    // first attempt has the highest success probability.
-    if (module === 'VIDEO') {
+    // Layer 2 (VIDEO + CARTOON) — health-aware + learned reorder. Keeps every
+    // provider in the chain (so fallback can still try them all → it only fails
+    // when ALL providers fail), but puts the healthiest, historically-reliable
+    // capable provider first so the first attempt has the highest success rate.
+    if (
+      module === 'VIDEO' ||
+      module === 'CARTOON' ||
+      module === 'VIDEO_FACE_SWAP'
+    ) {
       chain = this.healthReorder(chain);
     }
 

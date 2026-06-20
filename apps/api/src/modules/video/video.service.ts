@@ -89,55 +89,67 @@ export async function createVideoJob(
   userId: string,
   input: CreateVideoJobInput,
 ): Promise<VideoJobDto> {
+  // Video Changer (face swap) vs normal generation. Face swap inserts a target
+  // identity into a source video — there is no text prompt to plan — so it
+  // skips the Video Agent and routes straight to the dedicated face-swap
+  // providers. Everything else (credits/ledger/queue/webhook/events/narration)
+  // is reused unchanged.
+  const isFaceSwap = input.jobType === 'FACE_SWAP';
+
   // 0. Resolve the mode and, for "Continue editing", the best representative
-  // frame of the previous project (frame-based continuation — providers don't
-  // do video-to-video yet, but the agent routes by capability so a future v2v
-  // provider would be used automatically).
+  // frame of the previous project (frame-based continuation).
   let inputImageUrl = input.inputImageUrl;
   const parentJobId = input.parentJobId ?? null;
   let mode: VideoMode = inputImageUrl ? 'IMAGE_TO_VIDEO' : 'TEXT_TO_VIDEO';
-  let continuity = '';
-  if (parentJobId) {
-    const parent = await getJobForContinuation(userId, parentJobId);
-    if (parent) {
-      const frame = selectContinuationFrame(parent);
-      if (frame) {
-        inputImageUrl = frame;
-        mode = 'CONTINUATION';
+  let engineeredPrompt = input.prompt ?? '';
+  let agentPlan: unknown = { category: 'FACE_SWAP' };
+  let planCategory = 'FACE_SWAP';
+  let op = 'faceswap';
+
+  if (!isFaceSwap) {
+    let continuity = '';
+    if (parentJobId) {
+      const parent = await getJobForContinuation(userId, parentJobId);
+      if (parent) {
+        const frame = selectContinuationFrame(parent);
+        if (frame) {
+          inputImageUrl = frame;
+          mode = 'CONTINUATION';
+        }
+        // Creative project memory: carry the established look forward so this
+        // shot feels like part of the same series (unless the user changes it).
+        const parentPlan = (
+          parent.agentMeta as
+            | {
+                plan?: {
+                  style?: string;
+                  mood?: string;
+                  palette?: string;
+                  camera?: string;
+                  lighting?: string;
+                };
+              }
+            | null
+        )?.plan;
+        continuity = buildContinuityDirective(parentPlan ?? null);
       }
-      // Creative project memory: carry the established look forward so this
-      // shot feels like part of the same series (unless the user changes it).
-      const parentPlan = (
-        parent.agentMeta as
-          | {
-              plan?: {
-                style?: string;
-                mood?: string;
-                palette?: string;
-                camera?: string;
-                lighting?: string;
-              };
-            }
-          | null
-      )?.plan;
-      continuity = buildContinuityDirective(parentPlan ?? null);
     }
+
+    // 1. Intentional variation direction (server-side prompt engineering).
+    const conceptPrompt =
+      typeof input.variationIndex === 'number'
+        ? buildVariationPrompt(input.prompt, input.variationIndex)
+        : input.prompt;
+
+    // 2. Video Agent — plan + engineer the cinematic prompt, weaving in any
+    // creative-continuity. Provider-agnostic; the router picks the provider by
+    // capability + health + learned success.
+    const planned = await planVideoGeneration(conceptPrompt, mode, { continuity });
+    engineeredPrompt = planned.prompt;
+    agentPlan = planned.plan;
+    planCategory = planned.plan.category;
+    op = planned.op;
   }
-
-  // 1. Intentional variation direction (server-side prompt engineering).
-  const conceptPrompt =
-    typeof input.variationIndex === 'number'
-      ? buildVariationPrompt(input.prompt, input.variationIndex)
-      : input.prompt;
-
-  // 2. Video Agent — plan + engineer the cinematic prompt, weaving in any
-  // creative-continuity from the project. Provider-agnostic; the router selects
-  // the actual provider by capability + health + learned success.
-  const { prompt: engineeredPrompt, plan, op } = await planVideoGeneration(
-    conceptPrompt,
-    mode,
-    { continuity },
-  );
 
   // 3. Pricing depends ONLY on quality (provider-independent). Reserve up-front;
   // the execution ledger records the lifecycle for fair settlement / refunds.
@@ -151,12 +163,12 @@ export async function createVideoJob(
     userId,
     credits: creditsRequired,
     module: 'VIDEO',
-    description: `Video generation: ${input.durationSeconds}s ${input.resolution} ${input.qualityMode}`,
+    description: `${isFaceSwap ? 'Video face swap' : 'Video generation'}: ${input.durationSeconds}s ${input.resolution} ${input.qualityMode}`,
     metadata: {
       durationSeconds: input.durationSeconds,
       resolution: input.resolution,
       qualityMode: input.qualityMode,
-      mode,
+      mode: isFaceSwap ? 'FACE_SWAP' : mode,
     },
   });
   const ledger = createLedger(creditsRequired, deduction.transactionId);
@@ -181,7 +193,15 @@ export async function createVideoJob(
       revisedPrompt: engineeredPrompt,
       parentJobId,
       variationIndex: input.variationIndex ?? null,
-      agentMeta: { mode, category: plan.category, op, plan, ledger },
+      jobType: isFaceSwap ? 'FACE_SWAP' : 'GENERATE',
+      targetImageUrl: input.targetImageUrl ?? null,
+      agentMeta: {
+        mode: isFaceSwap ? 'FACE_SWAP' : mode,
+        category: planCategory,
+        op,
+        plan: agentPlan,
+        ledger,
+      },
     })
     .returning();
 
@@ -193,13 +213,15 @@ export async function createVideoJob(
   try {
     await aiRouter.route({
       userId,
-      module: 'VIDEO',
+      module: isFaceSwap ? 'VIDEO_FACE_SWAP' : 'VIDEO',
       strategy: routingStrategy,
       // The Video Agent's engineered, cinematic prompt — never the raw prompt.
       prompt: engineeredPrompt,
       negativePrompt: input.negativePrompt,
       inputImageUrl,
       inputVideoUrl: input.inputVideoUrl,
+      // Face/head to insert (face-swap only; ignored by the video pipeline).
+      targetImageUrl: input.targetImageUrl,
       durationSeconds: input.durationSeconds,
       resolution: input.resolution,
       qualityMode: input.qualityMode,
@@ -280,10 +302,10 @@ export async function createVideoJob(
         errorMessage: CLIENT_JOB_SUBMIT_FAILED,
         creditRefunded: true,
         agentMeta: {
-          mode,
-          category: plan.category,
+          mode: isFaceSwap ? 'FACE_SWAP' : mode,
+          category: planCategory,
           op,
-          plan,
+          plan: agentPlan,
           ledger: releaseLedger(ledger, creditsRequired),
         },
         updatedAt: new Date(),

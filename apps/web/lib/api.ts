@@ -195,6 +195,7 @@ export const videoApi = {
   estimate: (duration: number, resolution: string, qualityMode: string) =>
     api.get(`/video/estimate?duration=${duration}&resolution=${resolution}&qualityMode=${qualityMode}`),
   generate: (data: Record<string, unknown>) => api.post('/video/generate', data),
+  faceSwap: (data: Record<string, unknown>) => api.post('/video/face-swap', data),
   listJobs: (page = 1, limit = 20, status?: string) =>
     api.get(`/video/jobs?page=${page}&limit=${limit}${status ? `&status=${status}` : ''}`),
   getJob: (jobId: string) => api.get(`/video/jobs/${jobId}`),

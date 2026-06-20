@@ -43,6 +43,13 @@
       "when": 1781726450553,
       "tag": "0005_add_video_agent_meta",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781898987921,
+      "tag": "0006_add_video_changer_face_swap",
+      "breakpoints": true
     }
   ]
 }

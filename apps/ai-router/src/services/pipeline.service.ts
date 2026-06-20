@@ -196,9 +196,10 @@ export class PipelineService {
       success: outcome.result.success,
     });
 
-    // Feed the self-improving VIDEO learning signal: record the final render
-    // outcome (provider, success, latency, retries) so provider ranking adapts.
-    if (request.module === 'VIDEO') {
+    // Feed the self-improving learning signal for VIDEO + CARTOON renders:
+    // record the final outcome (provider, success, latency, retries) so the
+    // shared provider ranking adapts to real reliability over time.
+    if (request.module === 'VIDEO' || request.module === 'CARTOON') {
       recordVideoOutcome({
         provider: outcome.provider,
         success: outcome.result.success,

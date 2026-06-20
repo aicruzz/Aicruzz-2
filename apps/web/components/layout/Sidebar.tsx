@@ -6,11 +6,11 @@ import { usePathname } from "next/navigation";
 import {
   Video,
   MessageSquare,
-  Paintbrush,
   Wallet,
   Code2,
   Camera,
   Sparkles,
+  Replace,
   ChevronRight,
   LayoutDashboard,
   User,
@@ -19,26 +19,25 @@ import {
 } from "lucide-react";
 import { clsx } from "clsx";
 import { motion, useReducedMotion } from "framer-motion";
+import { ROUTES } from "@/lib/nav";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogoutButton } from "@/components/auth/LogoutButton";
 
 const navItems = [
-  { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
-  { href: "/live-cam", icon: Camera, label: "Live Cam", badge: "LIVE" },
-  { href: "/video-studio", icon: Video, label: "Video Studio" },
-  // { href: '/video', icon: Video, label: 'Video Gen' },
-  { href: "/chat-studio", icon: MessageSquare, label: "AI Chat" },
-  // { href: '/chat', icon: MessageSquare, label: 'Chat (classic)' },
+  { href: ROUTES.dashboard, icon: LayoutDashboard, label: "Dashboard" },
+  { href: ROUTES.liveCam, icon: Camera, label: "Live Cam", badge: "LIVE" },
+  { href: ROUTES.videoStudio, icon: Video, label: "Video Studio" },
+  { href: ROUTES.videoChanger, icon: Replace, label: "Video Changer" },
+  { href: ROUTES.chatStudio, icon: MessageSquare, label: "AI Chat" },
   {
-    href: "/cartoon-studio",
+    href: ROUTES.cartoonStudio,
     icon: Sparkles,
     label: "Cartoon Studio",
   },
-  { href: "/library", icon: FolderOpen, label: "Library" },
-  // { href: "/cartoon", icon: Paintbrush, label: "Cartoon" },
-  { href: "/wallet", icon: Wallet, label: "Wallet" },
-  { href: "/api-platform", icon: Code2, label: "API" },
-  { href: "/profile", icon: User, label: "Profile" },
+  { href: ROUTES.library, icon: FolderOpen, label: "Library" },
+  { href: ROUTES.wallet, icon: Wallet, label: "Wallet" },
+  { href: ROUTES.api, icon: Code2, label: "API" },
+  { href: ROUTES.profile, icon: User, label: "Profile" },
 ];
 
 export function Sidebar() {

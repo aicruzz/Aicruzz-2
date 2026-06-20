@@ -22,6 +22,10 @@ export interface CreateVideoJobInput {
   // intentional A–E variations. The Video Agent handles the rest.
   parentJobId?: string;
   variationIndex?: number;
+  // Video Changer (face swap): kind of job + target identity image. Source
+  // video is `inputVideoUrl`. Defaults to a normal generation.
+  jobType?: 'GENERATE' | 'FACE_SWAP';
+  targetImageUrl?: string;
 }
 
 export interface VideoJobDto {
@@ -51,6 +55,8 @@ export interface VideoJobDto {
   revisedPrompt?: string | null;
   parentJobId?: string | null;
   variationIndex?: number | null;
+  jobType?: string | null;
+  targetImageUrl?: string | null;
 }
 
 /**

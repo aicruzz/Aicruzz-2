@@ -3,10 +3,6 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
-  Camera,
-  Video,
-  MessageSquare,
-  Paintbrush,
   Wallet,
   Code2,
   TrendingUp,
@@ -18,6 +14,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { walletApi } from '@/lib/api';
 import { FeaturedShowcase } from '@/components/banners/FeaturedShowcase';
+import { DASHBOARD_MODULES } from '@/lib/nav';
 
 interface WalletBalance {
   credits: number;
@@ -27,49 +24,6 @@ interface WalletBalance {
   daysUntilExpiry: number | null;
 }
 
-const modules = [
-  {
-    href: '/live-cam',
-    icon: Camera,
-    label: 'Live Cam',
-    description: 'Real-time face swap with voice changer',
-    rate: '0.2 credits/sec',
-    badge: 'LIVE',
-    gradient: 'from-red-500/20 to-rose-600/10',
-    borderColor: 'border-red-500/20',
-    iconColor: 'text-red-400',
-  },
-  {
-    href: '/video',
-    icon: Video,
-    label: 'Video Generation',
-    description: 'Text to video with lip sync',
-    rate: 'From 12 credits/sec',
-    gradient: 'from-brand-500/20 to-blue-600/10',
-    borderColor: 'border-brand-500/20',
-    iconColor: 'text-brand-400',
-  },
-  {
-    href: '/chat',
-    icon: MessageSquare,
-    label: 'AI Chat',
-    description: 'Multi-modal streaming AI assistant',
-    rate: 'From 5 credits',
-    gradient: 'from-green-500/20 to-emerald-600/10',
-    borderColor: 'border-green-500/20',
-    iconColor: 'text-green-400',
-  },
-  {
-    href: '/cartoon',
-    icon: Paintbrush,
-    label: 'Cartoon Studio',
-    description: 'Animated ads and human cartoon',
-    rate: 'From 10 credits',
-    gradient: 'from-purple-500/20 to-violet-600/10',
-    borderColor: 'border-purple-500/20',
-    iconColor: 'text-purple-400',
-  },
-];
 
 export default function DashboardPage() {
   const { user, refreshUser } = useAuth();
@@ -196,7 +150,7 @@ export default function DashboardPage() {
           AI Modules
         </h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-4">
-          {modules.map((mod) => {
+          {DASHBOARD_MODULES.map((mod) => {
             const Icon = mod.icon;
             return (
               <Link

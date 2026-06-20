@@ -11,7 +11,7 @@ import type {
 } from './types';
 import { publicRouteFailureMessage } from './utils/client-safe-message';
 
-const ASYNC_MODULES = new Set(['VIDEO', 'CARTOON']);
+const ASYNC_MODULES = new Set(['VIDEO', 'CARTOON', 'VIDEO_FACE_SWAP']);
 
 /**
  * AiRouter
